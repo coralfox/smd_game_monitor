@@ -1038,9 +1038,9 @@ class GameMonitorGUI:
     AUTHOR = "重楼一叶"
     PAN_LINK = "https://qj2smd.ysepan.com/"
     PAN_PASSWORD = "1234"
-    GITHUB_LINK = "https://github.com/yourname/game-monitor"
-    UPDATE_URL = "https://raw.githubusercontent.com/yourname/game-monitor/main/version.txt"
-    WECHAT_PAY_URL = "wxp://f2f67IldwgU8nQr94p7pub5BDo6BbhLNqzpqNlivgP2HUjE"       # 你的微信收款链接
+    GITHUB_LINK = "https://github.com/coralfox/smd_game_monitor"
+    UPDATE_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/version.txt"
+    WECHAT_PAY_URL = "wxp://f2f0sSU1dBcu_SftrSutvSM9dVK1LasDZnOShA4l10NmCY4"       # 你的微信收款链接
     ALIPAY_PAY_URL = "https://qr.alipay.com/fkx10172eaxgrkqw2wlbtd3?t=1782895171528"  # 你的支付宝收款链接
 
 

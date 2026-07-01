@@ -1,0 +1,7 @@
+game_monitor.log
+config.json
+crash_log.txt
+.history/
+.idea/
+__pycache__/
+configs/常用.json

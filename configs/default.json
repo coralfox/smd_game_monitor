@@ -1,0 +1,130 @@
+{
+    "window": {
+        "title": "Tom Clancy's The Division 2",
+        "class_name": "",
+        "use_window": true
+    },
+    "monitor": {
+        "region": {
+            "left": 10,
+            "top": 10,
+            "width": 360,
+            "height": 260
+        },
+        "check_interval": 1,
+        "preprocess": {
+            "grayscale": false,
+            "scale": 1
+        }
+    },
+    "debounce": {
+        "enabled": true,
+        "min_stable_frames": 2
+    },
+    "frequency": {
+        "window_seconds": 60,
+        "min_samples": 20,
+        "cooldown_seconds": 30
+    },
+    "strategies": {
+        "stuck_fallback": {
+            "name": "默认卡死处理",
+            "description": "当检测到脚本卡死时执行的默认操作",
+            "match_ids": [],
+            "match_stuck_type": "single",
+            "actions": [
+                {
+                    "type": "key_press",
+                    "key": "p",
+                    "presses": 1
+                }
+            ]
+        },
+        "single_stuck": {
+            "name": "单一卡死处理",
+            "description": "当检测到单一事件卡死时执行",
+            "match_ids": [],
+            "match_stuck_type": "single",
+            "actions": [
+                {
+                    "type": "key_press",
+                    "key": "p",
+                    "presses": 1
+                }
+            ]
+        },
+        "alternating_stuck": {
+            "name": "交替卡死处理",
+            "description": "当检测到两个事件交替卡死时执行",
+            "match_ids": [],
+            "match_stuck_type": "alternating",
+            "actions": [
+                {
+                    "type": "key_press",
+                    "key": "p",
+                    "presses": 2
+                }
+            ]
+        },
+        "path_error": {
+            "name": "路径错误处理",
+            "description": "当检测到路径相关错误时执行",
+            "match_ids": [
+                "路径",
+                "错误"
+            ],
+            "match_stuck_type": "single",
+            "actions": [
+                {
+                    "type": "key_press",
+                    "key": "p",
+                    "presses": 1
+                }
+            ]
+        },
+        "no_bounty_stuck": {
+            "name": "无悬赏卡死处理",
+            "description": "当未检测到悬赏时，如果发生单一卡死则执行",
+            "match_ids": [],
+            "exclude_ids": [
+                "悬赏"
+            ],
+            "match_stuck_type": "single",
+            "actions": [
+                {
+                    "type": "key_press",
+                    "key": "p",
+                    "presses": 1
+                }
+            ]
+        }
+    },
+    "logging": {
+        "level": "INFO",
+        "log_to_file": true,
+        "log_file": "game_monitor.log",
+        "save_screenshots": true,
+        "screenshot_dir": "screenshots"
+    },
+    "hotkeys": {
+        "start_stop": "F8",
+        "pause_resume": "F10"
+    },
+    "ui_options": {
+        "always_on_top_game": false,
+        "show_floating_stats": true
+    },
+    "alert": {
+        "pushplus_enabled": false,
+        "pushplus_token": "",
+        "email_enabled": false,
+        "email_smtp_server": "",
+        "email_smtp_port": 465,
+        "email_use_ssl": true,
+        "email_user": "",
+        "email_password": "",
+        "email_to": "",
+        "alert_cooldown_minutes": 15,
+        "alert_trigger_threshold": 6
+    }
+}

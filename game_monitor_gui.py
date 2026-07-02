@@ -1739,16 +1739,18 @@ class GameMonitorGUI:
         self.about_textbox.config(state='disabled')
 
         # ===== GitHub 捐赠名单配置 =====
-        GITHUB_DONORS_URL = "https://raw.githubusercontent.com/你的用户名/仓库/main/donors.json"
-        CACHE_DIR = "avatar_cache"
+        GITHUB_DONORS_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/donors.json"
+        CACHE_DIR = os.path.join(self.app_dir, "avatar_cache")
         os.makedirs(CACHE_DIR, exist_ok=True)
 
-        # ===== 圆形头像 + 缓存 =====
+        # 用字典保存 PhotoImage 引用，防止被 GC 回收
+        self._donor_photos = []
+
         def get_circle_avatar(qq, size=32):
             cache_path = os.path.join(CACHE_DIR, f"{qq}.png")
 
             if os.path.exists(cache_path):
-                img = Image.open(cache_path)
+                img = Image.open(cache_path).convert("RGBA")
             else:
                 url = f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100"
                 resp = requests.get(url, timeout=8)
@@ -1758,32 +1760,33 @@ class GameMonitorGUI:
 
             img = img.resize((size, size), Image.LANCZOS)
 
+            # 圆形裁剪
             mask = Image.new("L", (size, size), 0)
             ImageDraw.Draw(mask).ellipse((0, 0, size, size), fill=255)
             img.putalpha(mask)
 
             return ImageTk.PhotoImage(img)
 
-        # ===== UI 安全插入 =====
         def insert_donor(photo, name, color):
-            self.about_textbox.config(state='normal')
-            self.about_textbox.insert(tk.END, "\n")
+            try:
+                self.about_textbox.config(state='normal')
+                self.about_textbox.insert(tk.END, "\n")
 
-            if photo:
-                self.about_textbox.image_create(tk.END, image=photo)
-                self.about_textbox.insert(tk.END, " ")
+                if photo:
+                    self.about_textbox.image_create(tk.END, image=photo)
+                    self.about_textbox.insert(tk.END, " ")
 
-            tag = f"donor_{name}"
-            self.about_textbox.insert(tk.END, name, tag)
-            self.about_textbox.tag_config(
-                tag,
-                foreground=color,
-                font=('微软雅黑', 10, 'bold')
-            )
+                tag = f"donor_{name}"
+                self.about_textbox.insert(tk.END, name, tag)
+                self.about_textbox.tag_config(
+                    tag,
+                    foreground=color,
+                    font=('微软雅黑', 10, 'bold')
+                )
+                self.about_textbox.config(state='disabled')
+            except Exception as e:
+                print(f"插入捐赠人失败: {e}")
 
-            self.about_textbox.config(state='disabled')
-
-        # ===== 后台线程加载 =====
         def load_donors():
             try:
                 resp = requests.get(GITHUB_DONORS_URL, timeout=10)
@@ -1794,15 +1797,21 @@ class GameMonitorGUI:
                 return
 
             for donor in donors:
-                qq = donor["qq"]
-                name = donor["name"]
+                qq = str(donor.get("qq", "")).strip()
+                name = donor.get("name", "").strip()
                 color = donor.get("color", "#333")
+
+                if not qq or not name:
+                    continue
 
                 try:
                     photo = get_circle_avatar(qq)
                 except Exception as e:
                     print(f"头像加载失败 {qq}:", e)
                     photo = None
+
+                # 保存引用，防止 GC
+                self._donor_photos.append(photo)
 
                 tab.after(0, insert_donor, photo, name, color)
 

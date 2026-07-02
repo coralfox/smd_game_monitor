@@ -5,3 +5,7 @@ crash_log.txt
 .idea/
 __pycache__/
 configs/常用.json
+game_monitor_gui.spec
+avatar_cache/
+build/
+dist/

@@ -11,7 +11,7 @@
             "width": 360,
             "height": 260
         },
-        "check_interval": 1,
+        "check_interval": 1.0,
         "preprocess": {
             "grayscale": false,
             "scale": 1
@@ -27,76 +27,106 @@
         "cooldown_seconds": 30
     },
     "strategies": {
-        "stuck_fallback": {
-            "name": "默认卡死处理",
-            "description": "当检测到脚本卡死时执行的默认操作",
-            "match_ids": [],
-            "match_stuck_type": "single",
-            "actions": [
-                {
-                    "type": "key_press",
-                    "key": "p",
-                    "presses": 1
-                }
-            ]
-        },
         "single_stuck": {
             "name": "单一卡死处理",
             "description": "当检测到单一事件卡死时执行",
-            "match_ids": [],
+            "match_ids": [
+                "当前事件",
+                "移动"
+            ],
+            "exclude_ids": [],
             "match_stuck_type": "single",
             "actions": [
                 {
+                    "type": "screenshot"
+                },
+                {
                     "type": "key_press",
                     "key": "p",
-                    "presses": 1
+                    "presses": 2,
+                    "interval": 0.5
                 }
-            ]
+            ],
+            "stuck_threshold": 30,
+            "stuck_ratio": 0.8
         },
         "alternating_stuck": {
             "name": "交替卡死处理",
             "description": "当检测到两个事件交替卡死时执行",
-            "match_ids": [],
+            "match_ids": [
+                "当前事件"
+            ],
+            "exclude_ids": [],
             "match_stuck_type": "alternating",
             "actions": [
                 {
+                    "type": "screenshot"
+                },
+                {
+                    "type": "delay",
+                    "seconds": 1.0
+                },
+                {
                     "type": "key_press",
                     "key": "p",
-                    "presses": 2
+                    "presses": 2,
+                    "interval": 0.5
                 }
-            ]
+            ],
+            "alternating_threshold": 40,
+            "alternating_ratio": 0.85
         },
         "path_error": {
             "name": "路径错误处理",
             "description": "当检测到路径相关错误时执行",
             "match_ids": [
-                "路径",
-                "错误"
+                "路劲",
+                "错误",
+                "开头"
             ],
+            "exclude_ids": [],
             "match_stuck_type": "single",
             "actions": [
+                {
+                    "type": "screenshot"
+                },
+                {
+                    "type": "delay",
+                    "seconds": 1.0
+                },
                 {
                     "type": "key_press",
                     "key": "p",
                     "presses": 1
                 }
-            ]
+            ],
+            "stuck_threshold": 30,
+            "stuck_ratio": 0.8
         },
         "no_bounty_stuck": {
             "name": "无悬赏卡死处理",
             "description": "当未检测到悬赏时，如果发生单一卡死则执行",
             "match_ids": [],
             "exclude_ids": [
-                "悬赏"
+                "悬赏执行"
             ],
             "match_stuck_type": "single",
             "actions": [
+                {
+                    "type": "screenshot"
+                },
+                {
+                    "type": "delay",
+                    "seconds": 1.0
+                },
                 {
                     "type": "key_press",
                     "key": "p",
                     "presses": 1
                 }
-            ]
+            ],
+            "stuck_threshold": 30,
+            "stuck_ratio": 0.8
         }
     },
     "logging": {
@@ -118,7 +148,7 @@
         "pushplus_enabled": false,
         "pushplus_token": "",
         "email_enabled": false,
-        "email_smtp_server": "",
+        "email_smtp_server": "smtp.qq.com",
         "email_smtp_port": 465,
         "email_use_ssl": true,
         "email_user": "",

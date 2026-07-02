@@ -9,3 +9,9 @@ game_monitor_gui.spec
 avatar_cache/
 build/
 dist/
+SMD游戏监控程序.spec
+SMD游戏监控程序使用说明.md
+打包命令.txt
+一键打包.bat
+configs/测试.json
+SMD游戏监控程序使用说明.assets/

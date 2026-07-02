@@ -316,8 +316,29 @@ class OCREngine:
                         continue
                     lines.append(text)
         raw_text = '\n'.join(lines)
+        # 标准化OCR文本：统一相似符号，减少误判
+        raw_text = self._normalize_ocr_text(raw_text)
         logging.debug(f"RapidOCR原始结果: [{raw_text}]")
         return raw_text
+
+    @staticmethod
+    def _normalize_ocr_text(text: str) -> str:
+        """标准化OCR文本：统一容易混淆的符号"""
+        import re
+        # 下划线 → 连字符（OCR经常把-识别为_）
+        text = text.replace('_', '-')
+        # 等号 → 连字符（OCR可能把-识别为=）
+        text = text.replace('=', '-')
+        # 全角符号 → 半角
+        text = text.replace('－', '-').replace('—', '-')
+        text = text.replace('（', '(').replace('）', ')')
+        text = text.replace('：', ':')
+        # 数字与汉字之间缺少连字符的补全：如 "当前事件57移动" → "当前事件-57-移动"
+        text = re.sub(r'([\u4e00-\u9fff])(\d)', r'\1-\2', text)   # 汉字后接数字：事件57 → 事件-57
+        text = re.sub(r'(\d)([\u4e00-\u9fff])', r'\1-\2', text)   # 数字后接汉字：57移动 → 57-移动
+        # 多余空格清理
+        text = text.replace('  ', ' ')
+        return text
 
 
 class ActionExecutor:
@@ -327,6 +348,7 @@ class ActionExecutor:
         self.config = config
         self.window_hwnd = None
         self.window_offset = (0, 0)
+        self._current_strategy_name = ''  # 当前执行的策略名，用于截图命名
 
     def set_window(self, hwnd: int, offset: Tuple[int, int] = None):
         self.window_hwnd = hwnd
@@ -379,6 +401,8 @@ class ActionExecutor:
             elif action_type == 'log':
                 message = action.get('message', '')
                 logging.info(f"[动作日志] {message}")
+            elif action_type == 'screenshot':
+                self._screenshot_action(action)
             else:
                 logging.warning(f"未知动作类型: {action_type}")
         except Exception as e:
@@ -467,6 +491,49 @@ class ActionExecutor:
         for char in text:
             self.execute_action({'type': 'key_press', 'key': char, 'presses': 1})
 
+    def _screenshot_action(self, action: Dict):
+        """截图动作：截取整个游戏窗口，保存到异常子目录"""
+        import ctypes
+        from ctypes import wintypes as w
+        from datetime import datetime
+
+        if not self.window_hwnd:
+            logging.warning("[截图动作] 未设置窗口句柄，无法截图")
+            return
+
+        try:
+            # 获取窗口矩形
+            rect = w.RECT()
+            ctypes.windll.user32.GetWindowRect(self.window_hwnd, ctypes.byref(rect))
+            left, top = rect.left, rect.top
+            right, bottom = rect.right, rect.bottom
+            width = right - left
+            height = bottom - top
+            if width <= 0 or height <= 0:
+                logging.warning("[截图动作] 窗口尺寸无效，无法截图")
+                return
+
+            # 使用PIL ImageGrab截取窗口区域（彩色、正常分辨率）
+            img = ImageGrab.grab(bbox=(left, top, right, bottom))
+
+            # 保存到异常子目录（兼容 PyInstaller 单文件模式）
+            if getattr(sys, 'frozen', False):
+                app_dir = os.path.dirname(sys.executable)
+            else:
+                app_dir = os.path.dirname(os.path.abspath(__file__))
+            anomaly_dir = os.path.join(app_dir, '异常')
+            os.makedirs(anomaly_dir, exist_ok=True)
+
+            strategy_name = self._current_strategy_name or 'unknown'
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f"{strategy_name}_{timestamp}.png"
+            filepath = os.path.join(anomaly_dir, filename)
+
+            img.save(filepath, 'PNG')
+            logging.info(f"[截图动作] 已保存异常截图: {filename}")
+        except Exception as e:
+            logging.error(f"[截图动作] 截图失败: {e}")
+
 
 class FrequencyAnalyzer:
     """频率分析器 - 按策略维护独立样本库，分别统计检测卡脚本"""
@@ -497,19 +564,26 @@ class FrequencyAnalyzer:
                 groups.append((key, match_ids, exclude_ids))
         return groups
 
-    def add_sample(self, script_id: str):
+    def add_sample(self, script_id: str, full_text: str = None):
         now = time.time()
         added = False
         for strategy_key, match_ids, exclude_ids in self._strategy_keyword_groups:
-            # 排除匹配：如果包含排除关键词，则不匹配
-            if exclude_ids and any(kw in script_id for kw in exclude_ids):
+            # 排除匹配：使用完整多行文本检查，避免单行漏检
+            check_text = full_text if full_text else script_id
+            if exclude_ids and any(kw in check_text for kw in exclude_ids):
                 continue
-            # 正向匹配：如果设置了match_ids，则必须全部包含
-            if match_ids and not all(kw in script_id for kw in match_ids):
+            # 正向匹配：使用完整多行文本检查
+            if match_ids and not all(kw in check_text for kw in match_ids):
                 continue
             if strategy_key not in self.strategy_samples:
                 self.strategy_samples[strategy_key] = []
-            self.strategy_samples[strategy_key].append((now, script_id))
+            # 对于只有exclude_ids没有match_ids的排除型策略，添加策略标记样本
+            # 这样策略只检测"排除条件未触发"的频率，而不是普通事件的频率
+            if not match_ids and exclude_ids:
+                sample_id = f"__{strategy_key}__"
+            else:
+                sample_id = script_id
+            self.strategy_samples[strategy_key].append((now, sample_id))
             added = True
         if not added:
             if '_unmatched' not in self.strategy_samples:
@@ -546,6 +620,16 @@ class FrequencyAnalyzer:
 
         if match_stuck_type in ('any', 'single'):
             if top_count >= st and top_ratio >= sr:
+                # 对于策略标记样本（排除型策略），显示策略名称
+                display_id = top_id
+                if top_id.startswith('__') and top_id.endswith('__'):
+                    marker_key = top_id[2:-2]
+                    # 尝试从配置中获取策略名称
+                    strategies = self.config.data.get('strategies', {})
+                    if marker_key in strategies:
+                        display_id = strategies[marker_key].get('name', marker_key)
+                    else:
+                        display_id = marker_key
                 return {
                     'is_stuck': True,
                     'stuck_type': 'single',
@@ -553,7 +637,7 @@ class FrequencyAnalyzer:
                     'counts': dict(counts),
                     'total': total,
                     'top_ratio': top_ratio,
-                    'details': (f"单一编号卡死: [{top_id}] 出现 {top_count} 次 "
+                    'details': (f"单一编号卡死: [{display_id}] 出现 {top_count} 次 "
                                f"(占比 {top_ratio:.1%}, 阈值 {st}/{sr:.0%})")
                 }
 
@@ -566,15 +650,23 @@ class FrequencyAnalyzer:
                 # 交替卡死要求两个事件次数相对均衡（次高 >= 最高的30%）
                 min_alternating_balance = 0.3
                 if top2_count >= at and top2_ratio >= ar and second_count >= top_count * min_alternating_balance:
+                    id0, id1 = most_common[0][0], most_common[1][0]
+                    # 对于策略标记样本，显示策略名称
+                    strategies = self.config.data.get('strategies', {})
+                    def _display_name(sid):
+                        if sid.startswith('__') and sid.endswith('__'):
+                            mk = sid[2:-2]
+                            return strategies.get(mk, {}).get('name', mk) if mk in strategies else mk
+                        return sid
                     return {
                         'is_stuck': True,
                         'stuck_type': 'alternating',
-                        'stuck_ids': [most_common[0][0], most_common[1][0]],
+                        'stuck_ids': [id0, id1],
                         'counts': dict(counts),
                         'total': total,
                         'top_ratio': top2_ratio,
-                        'details': (f"双编号交替卡死: [{most_common[0][0]}]x{most_common[0][1]} "
-                                   f"[{most_common[1][0]}]x{most_common[1][1]} "
+                        'details': (f"双编号交替卡死: [{_display_name(id0)}]x{most_common[0][1]} "
+                                   f"[{_display_name(id1)}]x{most_common[1][1]} "
                                    f"(合计占比 {top2_ratio:.1%}, 阈值 {at}/{ar:.0%})")
                     }
 
@@ -712,7 +804,7 @@ class StrategyEngine:
     def check_and_trigger(self, current_id: str):
         lines = [line.strip() for line in current_id.split('\n') if line.strip()]
         for line in lines:
-            self.analyzer.add_sample(line)
+            self.analyzer.add_sample(line, full_text=current_id)
 
         result = self.analyzer.analyze()
         if not result['is_stuck']:
@@ -741,6 +833,7 @@ class StrategyEngine:
 
             actions = strategy.get('actions', [])
             if actions:
+                self.executor._current_strategy_name = strategy.get('name', strategy_key)
                 self.executor.execute_actions(actions)
 
             # 触发后清空该策略对应的样本库，重新采集

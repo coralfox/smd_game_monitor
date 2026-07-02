@@ -1034,12 +1034,13 @@ class FloatingStatsWindow:
 class GameMonitorGUI:
     """游戏监控GUI主界面"""
 
-    VERSION = "1.0.0"
+    VERSION = "1.0.1"
     AUTHOR = "重楼一叶"
     PAN_LINK = "https://qj2smd.ysepan.com/"
     PAN_PASSWORD = "1234"
     GITHUB_LINK = "https://github.com/coralfox/smd_game_monitor"
     UPDATE_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/version.txt"
+    GITEE_UPDATE_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/version.txt"
     WECHAT_PAY_URL = "wxp://f2f0sSU1dBcu_SftrSutvSM9dVK1LasDZnOShA4l10NmCY4"       # 你的微信收款链接
     ALIPAY_PAY_URL = "https://qr.alipay.com/fkx10172eaxgrkqw2wlbtd3?t=1782895171528"  # 你的支付宝收款链接
 
@@ -1057,8 +1058,11 @@ class GameMonitorGUI:
         y = (self.root.winfo_screenheight() - 700) // 2
         self.root.geometry(f"+{x}+{y}")
 
-        # 配置文件路径
-        self.app_dir = os.path.dirname(os.path.abspath(__file__))
+        # 配置文件路径（兼容 PyInstaller 单文件模式）
+        if getattr(sys, 'frozen', False):
+            self.app_dir = os.path.dirname(sys.executable)
+        else:
+            self.app_dir = os.path.dirname(os.path.abspath(__file__))
         self.configs_dir = os.path.join(self.app_dir, 'configs')
         os.makedirs(self.configs_dir, exist_ok=True)
         # 上次使用的配置记录
@@ -1084,6 +1088,17 @@ class GameMonitorGUI:
 
         # 生成默认配置文件（如果不存在）
         self._ensure_default_config()
+
+        # 首次启动：如果没有上次配置记录，自动设为default.json并保存.last_config
+        if not self.config_path:
+            default_path = os.path.join(self.configs_dir, 'default.json')
+            if os.path.exists(default_path):
+                self.config_path = default_path
+                self.config_filename = 'default.json'
+                self.config_data = self._load_config()
+                self._load_config_to_ui()
+                self._refresh_config_combo()
+                self._save_last_config()
 
         # 注册全局热键
         self._setup_hotkeys()
@@ -1136,9 +1151,18 @@ class GameMonitorGUI:
             self.config_combo.set('')
 
     def _ensure_default_config(self):
-        """确保configs目录下存在default.json默认配置文件"""
+        """确保configs目录下存在default.json默认配置文件（优先从打包资源复制）"""
         default_path = os.path.join(self.configs_dir, 'default.json')
         if not os.path.exists(default_path):
+            # PyInstaller 单文件模式：优先从打包资源复制
+            if getattr(sys, 'frozen', False):
+                bundled = os.path.join(sys._MEIPASS, 'configs', 'default.json')
+                if os.path.exists(bundled):
+                    import shutil
+                    shutil.copy2(bundled, default_path)
+                    self._refresh_config_combo()
+                    return
+            # 否则重新生成
             default_data = self._default_config()
             os.makedirs(self.configs_dir, exist_ok=True)
             with open(default_path, 'w', encoding='utf-8') as f:
@@ -1147,54 +1171,73 @@ class GameMonitorGUI:
 
     def _default_config(self):
         return {
-            "window": {"title": "", "class_name": "", "use_window": False},
+            "window": {"title": "Tom Clancy's The Division 2", "class_name": "", "use_window": True},
             "monitor": {
-                "region": {"left": 10, "top": 10, "width": 250, "height": 120},
-                "check_interval": 0.5,
+                "region": {"left": 10, "top": 10, "width": 360, "height": 260},
+                "check_interval": 1.0,
                 "preprocess": {"grayscale": False, "scale": 1}
             },
             "debounce": {"enabled": True, "min_stable_frames": 2},
             "frequency": {
-                "window_seconds": 60, "stuck_threshold": 100, "stuck_ratio": 0.8,
-                "min_samples": 20, "alternating_threshold": 80, "alternating_ratio": 0.9,
+                "window_seconds": 60,
+                "min_samples": 20,
                 "cooldown_seconds": 30
             },
             "strategies": {
-                "stuck_fallback": {
-                    "name": "默认卡死处理",
-                    "description": "当检测到脚本卡死时执行的默认操作",
-                    "match_ids": [],
-                    "match_stuck_type": "single",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 1}]
-                },
                 "single_stuck": {
                     "name": "单一卡死处理",
                     "description": "当检测到单一事件卡死时执行",
-                    "match_ids": [],
+                    "match_ids": ["当前事件", "移动"],
+                    "exclude_ids": [],
                     "match_stuck_type": "single",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 1}]
+                    "actions": [
+                        {"type": "screenshot"},
+                        {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
+                    ],
+                    "stuck_threshold": 30,
+                    "stuck_ratio": 0.8
                 },
                 "alternating_stuck": {
                     "name": "交替卡死处理",
                     "description": "当检测到两个事件交替卡死时执行",
-                    "match_ids": [],
+                    "match_ids": ["当前事件"],
+                    "exclude_ids": [],
                     "match_stuck_type": "alternating",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 2}]
+                    "actions": [
+                        {"type": "screenshot"},
+                        {"type": "delay", "seconds": 1.0},
+                        {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
+                    ],
+                    "alternating_threshold": 40,
+                    "alternating_ratio": 0.85
                 },
                 "path_error": {
                     "name": "路径错误处理",
                     "description": "当检测到路径相关错误时执行",
-                    "match_ids": ["路径", "错误"],
+                    "match_ids": ["路劲", "错误", "开头"],
+                    "exclude_ids": [],
                     "match_stuck_type": "single",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 1}]
+                    "actions": [
+                        {"type": "screenshot"},
+                        {"type": "delay", "seconds": 1.0},
+                        {"type": "key_press", "key": "p", "presses": 1}
+                    ],
+                    "stuck_threshold": 30,
+                    "stuck_ratio": 0.8
                 },
                 "no_bounty_stuck": {
                     "name": "无悬赏卡死处理",
                     "description": "当未检测到悬赏时，如果发生单一卡死则执行",
                     "match_ids": [],
-                    "exclude_ids": ["悬赏"],
+                    "exclude_ids": ["悬赏执行"],
                     "match_stuck_type": "single",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 1}]
+                    "actions": [
+                        {"type": "screenshot"},
+                        {"type": "delay", "seconds": 1.0},
+                        {"type": "key_press", "key": "p", "presses": 1}
+                    ],
+                    "stuck_threshold": 30,
+                    "stuck_ratio": 0.8
                 }
             },
             "logging": {"level": "INFO", "log_to_file": True, "log_file": "game_monitor.log", "save_screenshots": True, "screenshot_dir": "screenshots"},
@@ -1203,7 +1246,7 @@ class GameMonitorGUI:
             "alert": {
                 "pushplus_enabled": False, "pushplus_token": "",
                 "email_enabled": False,
-                "email_smtp_server": "", "email_smtp_port": 465, "email_use_ssl": True,
+                "email_smtp_server": "smtp.qq.com", "email_smtp_port": 465, "email_use_ssl": True,
                 "email_user": "", "email_password": "", "email_to": "",
                 "alert_cooldown_minutes": 15,
                 "alert_trigger_threshold": 6
@@ -1738,25 +1781,19 @@ class GameMonitorGUI:
         )
         self.about_textbox.config(state='disabled')
 
-        # ===== GitHub 捐赠名单配置 =====
+        # ===== 捐赠名单双源配置 =====
         GITHUB_DONORS_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/donors.json"
-        CACHE_DIR = os.path.join(self.app_dir, "avatar_cache")
-        os.makedirs(CACHE_DIR, exist_ok=True)
+        GITEE_DONORS_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/donors.json"
 
         # 用字典保存 PhotoImage 引用，防止被 GC 回收
         self._donor_photos = []
 
         def get_circle_avatar(qq, size=32):
-            cache_path = os.path.join(CACHE_DIR, f"{qq}.png")
-
-            if os.path.exists(cache_path):
-                img = Image.open(cache_path).convert("RGBA")
-            else:
-                url = f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100"
-                resp = requests.get(url, timeout=8)
-                resp.raise_for_status()
-                img = Image.open(BytesIO(resp.content)).convert("RGBA")
-                img.save(cache_path)
+            """加载QQ头像（纯内存，不缓存到本地）"""
+            url = f"https://q1.qlogo.cn/g?b=qq&nk={qq}&s=100"
+            resp = requests.get(url, timeout=8)
+            resp.raise_for_status()
+            img = Image.open(BytesIO(resp.content)).convert("RGBA")
 
             img = img.resize((size, size), Image.LANCZOS)
 
@@ -1787,13 +1824,25 @@ class GameMonitorGUI:
             except Exception as e:
                 print(f"插入捐赠人失败: {e}")
 
-        def load_donors():
+        def _load_donors_source(url, name, result_holder, result_event):
+            if result_event.is_set():
+                return
             try:
-                resp = requests.get(GITHUB_DONORS_URL, timeout=10)
+                resp = requests.get(url, timeout=10)
                 resp.raise_for_status()
                 donors = resp.json()
-            except Exception as e:
-                print("捐赠名单加载失败:", e)
+                if donors and not result_event.is_set():
+                    result_holder['donors'] = donors
+                    result_holder['source'] = name
+                    result_event.set()
+            except Exception:
+                pass
+
+        def _render_donors():
+            result_event.wait(timeout=15)
+            donors = result_holder.get('donors', [])
+            if not donors:
+                print("捐赠名单加载失败，双源均不可达")
                 return
 
             for donor in donors:
@@ -1815,7 +1864,12 @@ class GameMonitorGUI:
 
                 tab.after(0, insert_donor, photo, name, color)
 
-        threading.Thread(target=load_donors, daemon=True).start()
+        result_event = threading.Event()
+        result_holder = {'donors': None, 'source': None}
+
+        threading.Thread(target=_load_donors_source, args=(GITHUB_DONORS_URL, "GitHub", result_holder, result_event), daemon=True).start()
+        threading.Thread(target=_load_donors_source, args=(GITEE_DONORS_URL, "Gitee", result_holder, result_event), daemon=True).start()
+        threading.Thread(target=_render_donors, daemon=True).start()
 
     def _sync_checkbuttons(self):
         """同步Checkbutton的勾选状态到_level_enabled"""
@@ -2346,32 +2400,51 @@ class GameMonitorGUI:
             self._log("[设置] 悬浮窗口已隐藏")
 
     def _check_update(self):
-        """异步检测更新，有新版本时在标题栏和关于页提示"""
+        """双源异步竞速检测更新，GitHub/Gitee 谁快用谁"""
         self.update_status_var.set("正在检测更新...")
-
-        def _do_check():
-            try:
-                import urllib.request
-                req = urllib.request.Request(self.UPDATE_URL, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=5) as resp:
-                    latest = resp.read().decode('utf-8').strip()
-                if latest and latest != self.VERSION:
-                    msg = f"发现新版本 {latest}，当前版本 {self.VERSION}"
-                    self.root.after(0, lambda: self.root.title(
-                        f"SMD游戏监控程序 v{self.VERSION} - 作者:{self.AUTHOR}  [有新版本 {latest}]"
-                    ))
-                    self.root.after(0, lambda: self.update_status_var.set(msg))
-                    self._log(f"[更新] {msg}")
-                else:
-                    msg = f"当前已是最新版本 v{self.VERSION}"
-                    self.root.after(0, lambda: self.update_status_var.set(msg))
-                    self._log(f"[更新] {msg}")
-            except Exception as e:
-                msg = f"检测失败: {e}"
-                self.root.after(0, lambda: self.update_status_var.set(msg))
-                self._log(f"[更新] {msg}")
         import threading
-        threading.Thread(target=_do_check, daemon=True).start()
+        import urllib.request
+
+        result_event = threading.Event()
+        result_holder = {'latest': None, 'source': None, 'done': False}
+
+        def _check_source(url, name):
+            if result_event.is_set():
+                return
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=8) as resp:
+                    latest = resp.read().decode('utf-8').strip()
+                if latest and not result_event.is_set():
+                    result_holder['latest'] = latest
+                    result_holder['source'] = name
+                    result_event.set()
+            except Exception:
+                pass
+
+        def _on_result():
+            result_event.wait(timeout=15)
+            latest = result_holder.get('latest')
+            if latest and latest != self.VERSION:
+                src = result_holder.get('source', 'unknown')
+                msg = f"发现新版本 {latest} (来自 {src})"
+                self.root.title(
+                    f"SMD游戏监控程序 v{self.VERSION} - 作者:{self.AUTHOR}  [有新版本 {latest}]"
+                )
+                self.update_status_var.set(msg)
+                self._log(f"[更新] {msg}")
+            elif latest:
+                msg = f"当前已是最新版本 v{self.VERSION}"
+                self.update_status_var.set(msg)
+                self._log(f"[更新] {msg}")
+            else:
+                msg = "检测更新失败，双源均不可达"
+                self.update_status_var.set(msg)
+                self._log(f"[更新] {msg}")
+
+        threading.Thread(target=_check_source, args=(self.UPDATE_URL, "GitHub"), daemon=True).start()
+        threading.Thread(target=_check_source, args=(self.GITEE_UPDATE_URL, "Gitee"), daemon=True).start()
+        threading.Thread(target=_on_result, daemon=True).start()
 
     # ===== 窗口选择功能 =====
     def _select_window(self):

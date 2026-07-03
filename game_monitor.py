@@ -70,20 +70,37 @@ class Config:
                     "description": "当检测到脚本卡死时执行的默认操作",
                     "match_ids": [],
                     "match_stuck_type": "single",
+                    "severity": 1.0,
                     "actions": [{"type": "key_press", "key": "p", "presses": 1}]
                 },
                 "single_stuck": {
-                    "name": "单一卡死处理",
-                    "description": "当检测到单一事件卡死时执行",
-                    "match_ids": [],
+                    "name": "单一移动卡死处理",
+                    "description": "当检测到单一移动事件卡死时执行（60秒窗口）",
+                    "match_ids": ["当前事件", "移动"],
+                    "exclude_ids": [],
                     "match_stuck_type": "single",
-                    "actions": [{"type": "key_press", "key": "p", "presses": 1}]
+                    "severity": 1.0,
+                    "actions": [{"type": "screenshot"}, {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}],
+                    "stuck_threshold": 30, "stuck_ratio": 0.8
+                },
+                "action_stuck": {
+                    "name": "事件动作卡死处理",
+                    "description": "当检测到非移动类事件卡死时执行（5分钟窗口，容忍长处理）",
+                    "match_ids": ["当前事件"],
+                    "exclude_ids": ["移动"],
+                    "match_stuck_type": "single",
+                    "severity": 1.0,
+                    "window_seconds": 300, "min_samples": 100,
+                    "actions": [{"type": "screenshot"}, {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}],
+                    "stuck_threshold": 200, "stuck_ratio": 0.8
                 },
                 "alternating_stuck": {
                     "name": "交替卡死处理",
                     "description": "当检测到两个事件交替卡死时执行",
-                    "match_ids": [],
+                    "match_ids": ["当前事件"],
+                    "exclude_ids": [],
                     "match_stuck_type": "alternating",
+                    "severity": 2.0,
                     "actions": [{"type": "key_press", "key": "p", "presses": 2}]
                 },
                 "path_error": {
@@ -91,6 +108,7 @@ class Config:
                     "description": "当检测到路径相关错误时执行",
                     "match_ids": ["路径", "错误"],
                     "match_stuck_type": "single",
+                    "severity": 2.0,
                     "actions": [{"type": "key_press", "key": "p", "presses": 1}]
                 },
                 "no_bounty_stuck": {
@@ -99,6 +117,7 @@ class Config:
                     "match_ids": [],
                     "exclude_ids": ["悬赏"],
                     "match_stuck_type": "single",
+                    "severity": 1.0,
                     "actions": [{"type": "key_press", "key": "p", "presses": 1}]
                 }
             },
@@ -307,9 +326,13 @@ class OCREngine:
             screenshot = cv2.cvtColor(np.array(screenshot), cv2.COLOR_RGB2BGR)
         result = self.ocr(screenshot)
         lines = []
-        if result and result[0]:
+        if result and isinstance(result, (list, tuple)) and len(result) > 0 and result[0]:
             for line in result[0]:
+                if not isinstance(line, (list, tuple)) or len(line) < 2:
+                    continue
                 text = line[1]
+                if not isinstance(text, str):
+                    continue
                 text = text.strip()
                 if text:
                     if text.isdigit():
@@ -408,6 +431,52 @@ class ActionExecutor:
         except Exception as e:
             logging.error(f"执行动作失败: {e}")
 
+    def upload_screenshot_to_imgbb(self, image_path: str = None, image_data=None) -> str:
+        """上传截图到ImgBB图床，返回URL。优先使用本地文件，其次使用PIL Image对象"""
+        imgbb_key = getattr(self, '_imgbb_api_key', '')
+        if not imgbb_key:
+            return ''
+        try:
+            import base64, io, json, urllib.request, urllib.parse
+            from PIL import Image as PILImage
+            if image_path and os.path.isfile(image_path):
+                img = PILImage.open(image_path)
+            elif image_data is not None:
+                img = image_data
+            else:
+                return ''
+            # 缩小尺寸以适应推送，最大宽度400px
+            max_w = 400
+            if img.width > max_w:
+                ratio = max_w / img.width
+                img = img.resize((max_w, int(img.height * ratio)), PILImage.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format='JPEG', quality=85)
+            b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
+            upload_data = urllib.parse.urlencode({
+                'key': imgbb_key,
+                'image': b64,
+                'expiration': 86400
+            }).encode('utf-8')
+            upload_req = urllib.request.Request(
+                'https://api.imgbb.com/1/upload',
+                data=upload_data,
+                headers={'Content-Type': 'application/x-www-form-urlencoded'},
+                method='POST'
+            )
+            with urllib.request.urlopen(upload_req, timeout=10) as upload_resp:
+                upload_result = json.loads(upload_resp.read().decode('utf-8'))
+                if upload_result.get('success'):
+                    url = upload_result['data']['url']
+                    logging.info(f"[图床] 截图已上传: {url}")
+                    return url
+                else:
+                    logging.warning(f"[图床] 上传失败: {upload_result}")
+                    return ''
+        except Exception as e:
+            logging.warning(f"[图床] 上传异常: {e}")
+            return ''
+
     def execute_actions(self, actions: List[Dict], delay: float = 0.5):
         if not actions:
             return
@@ -492,7 +561,7 @@ class ActionExecutor:
             self.execute_action({'type': 'key_press', 'key': char, 'presses': 1})
 
     def _screenshot_action(self, action: Dict):
-        """截图动作：截取整个游戏窗口，保存到异常子目录"""
+        """截图动作：激活窗口并截取整个游戏窗口，保存到异常子目录"""
         import ctypes
         from ctypes import wintypes as w
         from datetime import datetime
@@ -500,6 +569,9 @@ class ActionExecutor:
         if not self.window_hwnd:
             logging.warning("[截图动作] 未设置窗口句柄，无法截图")
             return
+
+        # 先激活窗口，确保前台显示
+        self._activate_window()
 
         try:
             # 获取窗口矩形
@@ -531,6 +603,8 @@ class ActionExecutor:
 
             img.save(filepath, 'PNG')
             logging.info(f"[截图动作] 已保存异常截图: {filename}")
+            # 记录最近截图路径，供报警推送时上传
+            self._last_screenshot_path = filepath
         except Exception as e:
             logging.error(f"[截图动作] 截图失败: {e}")
 
@@ -567,48 +641,79 @@ class FrequencyAnalyzer:
     def add_sample(self, script_id: str, full_text: str = None):
         now = time.time()
         added = False
+        check_text = full_text if full_text else script_id
         for strategy_key, match_ids, exclude_ids in self._strategy_keyword_groups:
-            # 排除匹配：使用完整多行文本检查，避免单行漏检
-            check_text = full_text if full_text else script_id
+            # 排除匹配：使用完整多行文本检查
             if exclude_ids and any(kw in check_text for kw in exclude_ids):
                 continue
             # 正向匹配：使用完整多行文本检查
             if match_ids and not all(kw in check_text for kw in match_ids):
                 continue
+            # 提取样本ID：有match_ids时，提取匹配到的行作为稳定标识
+            if match_ids:
+                sample_id = self._extract_matched_line(check_text, match_ids)
+            else:
+                # 无match_ids时（如no_bounty_stuck），用统一标记
+                # （有悬赏执行的文本已被第一层 exclude_ids 过滤掉）
+                sample_id = "__无悬赏卡死__"
             if strategy_key not in self.strategy_samples:
                 self.strategy_samples[strategy_key] = []
-            # 对于只有exclude_ids没有match_ids的排除型策略，添加策略标记样本
-            # 这样策略只检测"排除条件未触发"的频率，而不是普通事件的频率
-            if not match_ids and exclude_ids:
-                sample_id = f"__{strategy_key}__"
-            else:
-                sample_id = script_id
             self.strategy_samples[strategy_key].append((now, sample_id))
             added = True
         if not added:
             if '_unmatched' not in self.strategy_samples:
                 self.strategy_samples['_unmatched'] = []
             self.strategy_samples['_unmatched'].append((now, script_id))
+
+        # 定期清理过期样本（避免内存无限增长）
         self._cleanup_old_samples(now)
 
-    def _cleanup_old_samples(self, now: float):
-        cutoff = now - self.window_seconds
+    @staticmethod
+    def _extract_matched_line(text: str, match_ids: list) -> str:
+        """从多行文本中提取包含所有匹配关键词的行"""
+        lines = text.split('\n')
+        for line in lines:
+            line = line.strip()
+            if line and all(kw in line for kw in match_ids):
+                return line
+        # 没找到精确匹配行，返回包含第一个关键词的行
+        for line in lines:
+            line = line.strip()
+            if line and match_ids[0] in line:
+                return line
+        return lines[0].strip() if lines else text
+
+    def _cleanup_old_samples(self, now: float = None):
+        if now is None:
+            now = time.time()
+        strategies = self.config.data.get('strategies', {})
         for key in list(self.strategy_samples.keys()):
+            # 每策略可单独配置统计窗口
+            ws = self.window_seconds
+            if key != '_unmatched':
+                s = strategies.get(key, {})
+                ws = s.get('window_seconds', ws)
+            cutoff = now - ws
             self.strategy_samples[key] = [(t, sid) for t, sid in self.strategy_samples[key] if t > cutoff]
             if not self.strategy_samples[key]:
                 del self.strategy_samples[key]
 
     def _analyze_queue(self, samples: list, match_stuck_type: str = 'any',
                        stuck_threshold: int = None, stuck_ratio: float = None,
-                       alternating_threshold: int = None, alternating_ratio: float = None) -> dict:
+                       alternating_threshold: int = None, alternating_ratio: float = None,
+                       window_seconds: float = None) -> dict:
         from collections import Counter
 
         st = stuck_threshold if stuck_threshold is not None else self.stuck_threshold
         sr = stuck_ratio if stuck_ratio is not None else self.stuck_ratio
         at = alternating_threshold if alternating_threshold is not None else self.alternating_threshold
         ar = alternating_ratio if alternating_ratio is not None else self.alternating_ratio
+        ws = window_seconds if window_seconds is not None else self.window_seconds
 
-        ids = [sid for _, sid in samples if sid]
+        # 按时间窗口过滤样本，只保留最近 ws 内的
+        cutoff = time.time() - ws
+        windowed = [(t, sid) for t, sid in samples if t >= cutoff]
+        ids = [sid for _, sid in windowed if sid]
         if not ids:
             return None
 
@@ -682,20 +787,51 @@ class FrequencyAnalyzer:
         }
 
     def analyze(self) -> dict:
+        from collections import Counter
+
         strategies = self.config.data.get('strategies', {})
         results = []
+
+        # DEBUG: 输出所有策略样本库的详细信息
+        logging.debug("[analyze] ===== 样本库详情 =====")
         for strategy_key, samples in self.strategy_samples.items():
-            if strategy_key == '_unmatched' or len(samples) < self.min_samples:
+            if not samples:
+                continue
+            sname = strategies.get(strategy_key, {}).get('name', strategy_key)
+            s_min = strategies.get(strategy_key, {}).get('min_samples', self.min_samples)
+            ids = [sid for _, sid in samples]
+            id_counts = Counter(ids)
+            top5 = id_counts.most_common(5)
+            top5_str = ', '.join(f'{sid}={cnt}' for sid, cnt in top5)
+            skip = len(samples) < s_min
+            logging.debug(f"[analyze] 策略 '{sname}' [{strategy_key}] 样本数={len(samples)} min={s_min} {'跳过' if skip else '分析中'} | Top: {top5_str}")
+        logging.debug("[analyze] =========================")
+
+        for strategy_key, samples in self.strategy_samples.items():
+            if strategy_key == '_unmatched':
                 continue
             strategy = strategies.get(strategy_key, {})
+            # 每策略可单独配置统计窗口和最小样本
+            s_min = strategy.get('min_samples', self.min_samples)
+            if len(samples) < s_min:
+                continue
             match_type = strategy.get('match_stuck_type', 'any')
+            s_window = strategy.get('window_seconds', self.window_seconds)
             r = self._analyze_queue(
                 samples, match_type,
                 stuck_threshold=strategy.get('stuck_threshold'),
                 stuck_ratio=strategy.get('stuck_ratio'),
                 alternating_threshold=strategy.get('alternating_threshold'),
-                alternating_ratio=strategy.get('alternating_ratio')
+                alternating_ratio=strategy.get('alternating_ratio'),
+                window_seconds=s_window
             )
+            if r is None:
+                continue
+            # 调试日志：显示每个策略的样本统计
+            if r and strategy_key != '_unmatched':
+                top_id = (r.get('stuck_ids') or [None])[0]
+                top_count = dict(r.get('counts', {})).get(top_id, 0)
+                logging.debug(f"[analyze] 策略 '{strategy_key}' 样本数={len(samples)} 最高事件={top_id} 次数={top_count} 总样本={r.get('total',0)} 占比={r.get('top_ratio',0):.1%} 是否卡死={r['is_stuck']}")
             if r and r['is_stuck']:
                 r['_strategy_key'] = strategy_key
                 results.append(r)
@@ -714,15 +850,19 @@ class FrequencyAnalyzer:
 
         single_results = [r for r in results if r['stuck_type'] == 'single']
         if single_results:
+            total_samples = sum(len(s) for s in self.strategy_samples.values() if s and isinstance(s, list))
             best = max(single_results, key=lambda x: x['total'])
-            del best['_strategy_key']
-            return best
+            strategy_key = best.pop('_strategy_key', '')
+            best['_strategy_key'] = strategy_key
+            return {'is_stuck': True, 'results': single_results, 'total_samples': total_samples}
 
         alternating_results = [r for r in results if r['stuck_type'] == 'alternating']
         if alternating_results:
+            total_samples = sum(len(s) for s in self.strategy_samples.values() if s and isinstance(s, list))
             best = max(alternating_results, key=lambda x: x['total'])
-            del best['_strategy_key']
-            return best
+            strategy_key = best.pop('_strategy_key', '')
+            best['_strategy_key'] = strategy_key
+            return {'is_stuck': True, 'results': alternating_results, 'total_samples': total_samples}
 
         return results[0]
 
@@ -748,16 +888,27 @@ class StrategyEngine:
         self.total_trigger_count = 0
         self.monitor_start_time = None
 
-    def _record_trigger(self):
+    def _record_trigger(self, strategy_key='', stuck_id=''):
         self.total_trigger_count += 1
         now = time.time()
-        self.trigger_history.append(now)
+        # 获取该策略的严重程度系数
+        strategy = self.config.strategies.get(strategy_key, {})
+        severity = strategy.get('severity', 1.0)
+        self.trigger_history.append({
+            'time': now,
+            'strategy_key': strategy_key,
+            'stuck_id': stuck_id,
+            'severity': severity
+        })
         # 检测时间窗口 = 触发冷却 × 阈值 × 2
         cooldown = self.config.data.get('frequency', {}).get('cooldown_seconds', 30)
         threshold = self.config.alert.get('alert_trigger_threshold', 6)
         detect_window = cooldown * threshold * 2
-        self.trigger_history = [t for t in self.trigger_history if now - t <= detect_window]
-        return len(self.trigger_history) >= threshold
+        self.trigger_history = [t for t in self.trigger_history if now - t.get('time', t) <= detect_window]
+        # 计算窗口内总系数
+        total_severity = sum(t.get('severity', 1.0) for t in self.trigger_history)
+        severity_threshold = self.config.alert.get('alert_severity_threshold', 10)
+        return total_severity >= severity_threshold
 
     def get_stats(self) -> dict:
         if self.monitor_start_time is None:
@@ -765,10 +916,26 @@ class StrategyEngine:
         runtime = time.time() - self.monitor_start_time
         hours = runtime / 3600.0 if runtime > 0 else 0
         tph = self.total_trigger_count / hours if hours > 0 else 0.0
+
+        # 各策略触发次数统计
+        strategy_trigger_counts = {}
+        for entry in self.trigger_history:
+            key = entry.get('strategy_key', 'unknown')
+            strategy_trigger_counts[key] = strategy_trigger_counts.get(key, 0) + 1
+
+        # 卡死事件统计
+        stuck_event_counts = {}
+        for entry in self.trigger_history:
+            sid = entry.get('stuck_id', 'unknown')
+            stuck_event_counts[sid] = stuck_event_counts.get(sid, 0) + 1
+
         return {
             'runtime': runtime,
             'total_triggers': self.total_trigger_count,
-            'triggers_per_hour': tph
+            'triggers_per_hour': tph,
+            'strategy_trigger_counts': strategy_trigger_counts,
+            'stuck_event_counts': stuck_event_counts,
+            'trigger_history': self.trigger_history
         }
 
     @staticmethod
@@ -802,12 +969,11 @@ class StrategyEngine:
         return matched
 
     def check_and_trigger(self, current_id: str):
-        lines = [line.strip() for line in current_id.split('\n') if line.strip()]
-        for line in lines:
-            self.analyzer.add_sample(line, full_text=current_id)
+        # 将完整OCR文本作为整体添加一次，而非逐行添加
+        self.analyzer.add_sample(current_id, full_text=current_id)
 
         result = self.analyzer.analyze()
-        if not result['is_stuck']:
+        if not result.get('is_stuck'):
             return
 
         cooldown = self.config.data.get('frequency', {}).get('cooldown_seconds', 30)
@@ -817,19 +983,22 @@ class StrategyEngine:
 
         self.last_trigger_time = now
 
-        stuck_ids = result['stuck_ids']
-        stuck_type = result['stuck_type']
+        # 遍历所有卡死结果，每个结果对应自己的策略
+        for r in result.get('results', []):
+            strategy_key = r.get('_strategy_key', '')
+            stuck_ids = r.get('stuck_ids', [])
+            stuck_type = r.get('stuck_type', '')
 
-        for strategy_key in self._match_strategy(stuck_ids[0] if stuck_ids else ''):
             strategy = self.config.strategies.get(strategy_key)
             if not strategy:
                 continue
+
             stuck_type_match = strategy.get('match_stuck_type', 'single')
             if stuck_type != stuck_type_match and stuck_type_match != 'any':
                 continue
 
-            logging.warning(f"触发策略 [{strategy.get('name', strategy_key)}] - {result['details']}")
-            logging.info(f"[策略] 事件卡死: {stuck_ids[0] if stuck_ids else 'N/A'} | 占比: {result['top_ratio']:.1%} | 总计: {result['total']}")
+            logging.warning(f"触发策略 [{strategy.get('name', strategy_key)}] - {r.get('details', '')}")
+            logging.info(f"[策略] 事件卡死: {stuck_ids[0] if stuck_ids else 'N/A'} | 占比: {r.get('top_ratio', 0):.1%} | 总计: {r.get('total', 0)}")
 
             actions = strategy.get('actions', [])
             if actions:
@@ -841,25 +1010,33 @@ class StrategyEngine:
                 del self.analyzer.strategy_samples[strategy_key]
                 logging.info(f"[策略] 清空策略 '{strategy_key}' 的样本库，重新采集")
 
-            if self._record_trigger():
+            if self._record_trigger(strategy_key=strategy_key,
+                                   stuck_id=stuck_ids[0] if stuck_ids else ''):
                 cooldown = self.config.data.get('frequency', {}).get('cooldown_seconds', 30)
                 threshold = self.config.alert.get('alert_trigger_threshold', 6)
                 detect_window = cooldown * threshold * 2
+                severity_threshold = self.config.alert.get('alert_severity_threshold', 10)
+                total_severity = sum(t.get('severity', 1.0) for t in self.trigger_history)
+                trigger_count_in_window = len(self.trigger_history)
                 logging.warning("=" * 50)
-                logging.warning(f"警告: {detect_window}秒内连续触发超过{threshold}次，脚本可能完全卡死！发送报警")
+                logging.warning(f"警告: {detect_window}秒内累计系数 {total_severity:.1f} >= {severity_threshold}（{trigger_count_in_window}次触发），脚本可能完全卡死！发送报警")
                 logging.warning("=" * 50)
                 stats = self.get_stats()
-                content = (
-                    f"{detect_window}秒内连续触发超过{threshold}次，脚本可能完全卡死！\n"
-                    f"运行时间: {self._fmt_time(stats['runtime'])}\n"
-                    f"总触发次数: {stats['total_triggers']}\n"
-                    f"触发频率: {stats['triggers_per_hour']:.1f} 次/时"
+                html_content = self._build_alert_html(
+                    trigger_count=trigger_count_in_window,
+                    detect_window=detect_window,
+                    threshold=threshold,
+                    stats=stats,
+                    strategy_name=strategy.get('name', strategy_key),
+                    stuck_type=stuck_type,
+                    stuck_ids=stuck_ids,
+                    result=result
                 )
-                self._send_alert("游戏监控-触发频率过高警告", content)
+                self._send_alert("游戏监控-触发频率过高警告", html_content)
                 break
 
     def _send_alert(self, title: str, content: str):
-        """发送报警信息（异步，不阻塞）- 根据配置选择PushPlus和/或邮件"""
+        """发送报警信息（异步，不阻塞）- content 为 HTML 格式"""
         # 报警冷却检查
         cooldown_minutes = int(self.config.alert.get('alert_cooldown_minutes', 15))
         cooldown_seconds = cooldown_minutes * 60
@@ -875,6 +1052,9 @@ class StrategyEngine:
         logging.info(f"[_send_alert] 报警配置: pushplus_enabled={alert_cfg.get('pushplus_enabled', False)}, "
                      f"email_enabled={alert_cfg.get('email_enabled', False)}")
 
+        # 邮件使用纯文本摘要
+        plain_text = self._html_to_plain(content)
+
         def _send_pushplus():
             if not alert_cfg.get('pushplus_enabled', False):
                 logging.info("[报警-PushPlus] 未启用，跳过")
@@ -889,7 +1069,9 @@ class StrategyEngine:
                 import urllib.request
                 url = 'http://www.pushplus.plus/send'
                 data = json.dumps({
-                    'token': token, 'title': title, 'content': content
+                    'token': token, 'title': title,
+                    'content': content,
+                    'template': 'html'
                 }).encode('utf-8')
                 req = urllib.request.Request(url, data=data,
                                               headers={'Content-Type': 'application/json'},
@@ -918,7 +1100,7 @@ class StrategyEngine:
                 import smtplib
                 from email.mime.text import MIMEText
                 from email.header import Header
-                msg = MIMEText(content, 'plain', 'utf-8')
+                msg = MIMEText(plain_text, 'plain', 'utf-8')
                 msg['Subject'] = Header(title, 'utf-8')
                 msg['From'] = user
                 msg['To'] = to_addr
@@ -939,6 +1121,364 @@ class StrategyEngine:
         threading.Thread(target=_send_pushplus, daemon=True).start()
         threading.Thread(target=_send_email, daemon=True).start()
 
+    def _build_alert_html(self, trigger_count, detect_window, threshold, stats,
+                          strategy_name, stuck_type, stuck_ids, result):
+        """构建 HTML 格式的报警内容"""
+        from datetime import datetime
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+        # 上传异常截图到图床
+        screenshot_url = ''
+        screenshot_path = getattr(self.executor, '_last_screenshot_path', '')
+        if screenshot_path and os.path.isfile(screenshot_path):
+            screenshot_url = self.executor.upload_screenshot_to_imgbb(image_path=screenshot_path)
+        screenshot_html = ''
+        if screenshot_url:
+            screenshot_html = f'''
+    <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+      <h3 style="color:#53a8b6;margin:0 0 12px 0;">📷 游戏截图</h3>
+      <div style="text-align:center;">
+        <img src="{screenshot_url}" style="max-width:100%%;border-radius:8px;" />
+      </div>
+    </div>'''
+
+        # 构建触发策略详情
+        strategies = self.config.strategies
+        strategy_rows = ''
+        for key, s in strategies.items():
+            if key in ('default', 'stuck_fallback'):
+                continue
+            name = s.get('name', key)
+            stype = s.get('match_stuck_type', '')
+            match = ', '.join(s.get('match_ids', [])) or '全部'
+            exclude = ', '.join(s.get('exclude_ids', [])) or '无'
+            actions_desc = []
+            for a in s.get('actions', []):
+                atype = a.get('type', '')
+                if atype == 'key_press':
+                    actions_desc.append(f"按键 {a.get('key', '').upper()} x{a.get('presses', 1)}")
+                elif atype == 'screenshot':
+                    actions_desc.append("截图")
+                elif atype == 'delay':
+                    actions_desc.append(f"等待 {a.get('seconds', 0)}s")
+                elif atype == 'mouse_click':
+                    actions_desc.append("鼠标点击")
+            actions_str = ' → '.join(actions_desc) if actions_desc else '无'
+            highlight = 'background:#2a1a1a;' if key == strategy_name else ''
+            sev = s.get('severity', 1.0)
+            strategy_rows += f'''
+      <tr style="{highlight}">
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{name}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{'单一' if stype == 'single' else '交替'}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;color:#e94560;font-weight:bold;">{sev}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{match}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{exclude}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{actions_str}</td>
+      </tr>'''
+
+        # 卡死详情
+        stuck_detail = ''
+        if result:
+            counts = result.get('counts', {})
+            top_items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:5]
+            detail_rows = ''
+            for sid, cnt in top_items:
+                pct = cnt / result.get('total', 1) * 100
+                bar_color = '#e94560' if pct > 50 else '#53a8b6'
+                detail_rows += f'''
+        <tr>
+          <td style="padding:4px 8px;color:#ccc;font-size:12px;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sid}</td>
+          <td style="padding:4px 8px;font-size:12px;">{cnt} ({pct:.1f}%%)</td>
+          <td style="padding:4px 8px;width:40%%;">
+            <div style="background:#1a1a2e;border-radius:4px;height:8px;overflow:hidden;">
+              <div style="background:{bar_color};height:100%%;width:{pct}%%;border-radius:4px;"></div>
+            </div>
+          </td>
+        </tr>'''
+            stuck_detail = f'''
+    <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+      <h3 style="color:#53a8b6;margin:0 0 12px 0;">🔍 卡死分析</h3>
+      <p style="color:#e94560;margin:0 0 8px 0;font-size:13px;">{result.get('details', '')}</p>
+      <table style="width:100%%;border-collapse:collapse;">
+        <tr style="color:#888;font-size:11px;">
+          <th style="padding:4px 8px;text-align:left;">事件ID</th>
+          <th style="padding:4px 8px;text-align:left;">次数</th>
+          <th style="padding:4px 8px;text-align:left;">占比</th>
+        </tr>
+        {detail_rows}
+      </table>
+    </div>'''
+
+        html = f'''<div style="background:#1a1a2e;color:#e0e0e0;padding:20px;font-family:'Microsoft YaHei',sans-serif;">
+  <div style="background:#16213e;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <h2 style="color:#e94560;margin:0 0 8px 0;">⚠️ 脚本卡死报警</h2>
+    <p style="color:#aaa;margin:0;font-size:13px;">SMD游戏监控程序 V{self.VERSION} | {now_str}</p>
+  </div>
+{screenshot_html}
+{stuck_detail}
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">📊 运行统计</h3>
+    <table style="width:100%%;border-collapse:collapse;font-size:14px;">
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">运行时间</td><td style="padding:8px;border-bottom:1px solid #1a1a2e;">{self._fmt_time(stats['runtime'])}</td></tr>
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">总触发次数</td><td style="padding:8px;color:#e94560;font-weight:bold;border-bottom:1px solid #1a1a2e;">{stats['total_triggers']} 次</td></tr>
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">触发频率</td><td style="padding:8px;border-bottom:1px solid #1a1a2e;">{stats['triggers_per_hour']:.1f} 次/时</td></tr>
+      <tr><td style="padding:8px;color:#aaa;">当前策略</td><td style="padding:8px;color:#4ecca3;">{strategy_name}</td></tr>
+    </table>
+  </div>
+  <div style="background:#0f3460;border-radius:12px;padding:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">📋 触发策略配置</h3>
+    <div style="overflow-x:auto;">
+      <table style="width:100%%;border-collapse:collapse;min-width:500px;">
+        <tr style="color:#888;font-size:11px;">
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">策略名称</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">类型</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">系数</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">匹配词</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">排除词</th>
+          <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">执行动作</th>
+        </tr>
+        {strategy_rows}
+      </table>
+    </div>
+  </div>
+  <div style="text-align:center;padding:12px;color:#666;font-size:12px;">
+    SMD游戏监控程序 V{self.VERSION}
+  </div>
+</div>'''
+        return html
+
+    @staticmethod
+    def _html_to_plain(html):
+        """简单提取 HTML 中的文本内容，用于邮件纯文本发送"""
+        import re
+        text = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
+        text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
+        text = re.sub(r'<br\s*/?>', '\n', text)
+        text = re.sub(r'</(p|div|tr|h[1-6])>', '\n', text)
+        text = re.sub(r'<[^>]+>', '', text)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        return text.strip()
+
+    def _build_stats_report_html(self) -> str:
+        """构建运行统计报告 HTML"""
+        from datetime import datetime
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        stats = self.get_stats()
+
+        # 截取当前游戏画面并上传
+        screenshot_html = ''
+        try:
+            current_screenshot = self.screen_capture.capture_region()
+            if current_screenshot:
+                screenshot_url = self.executor.upload_screenshot_to_imgbb(image_data=current_screenshot)
+                if screenshot_url:
+                    screenshot_html = f'''
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">📷 当前游戏画面</h3>
+    <div style="text-align:center;">
+      <img src="{screenshot_url}" style="max-width:100%%;border-radius:8px;" />
+    </div>
+  </div>'''
+        except Exception as e:
+            logging.debug(f"[统计报告] 截图上传失败: {e}")
+        runtime = stats['runtime']
+        total_triggers = stats['total_triggers']
+        tph = stats['triggers_per_hour']
+
+        # 从OCR文本中提取当前轮数
+        current_round = self._last_known_round or '未知'
+        round_text = str(current_round) if current_round != '未知' else '未知'
+
+        # 轮数效率
+        round_events = getattr(self, '_round_events', {})
+        rounds_count = len(round_events)
+        hours = runtime / 3600.0 if runtime > 0 else 0
+        rounds_per_hour = rounds_count / hours if hours > 0 else 0
+
+        # 策略触发统计
+        strategy_counts = stats.get('strategy_trigger_counts', {})
+        strategies = self.config.strategies
+        strategy_rows = ''
+        for key, count in sorted(strategy_counts.items(), key=lambda x: x[1], reverse=True):
+            name = strategies.get(key, {}).get('name', key)
+            pct = count / total_triggers * 100 if total_triggers > 0 else 0
+            strategy_rows += f'''
+      <tr>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{name}</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{count} 次</td>
+        <td style="padding:6px 8px;border-bottom:1px solid #1a1a2e;font-size:13px;">{pct:.1f}%%</td>
+        <td style="padding:6px 8px;width:40%%;border-bottom:1px solid #1a1a2e;">
+          <div style="background:#1a1a2e;border-radius:4px;height:8px;overflow:hidden;">
+            <div style="background:#4ecca3;height:100%%;width:{pct}%%;border-radius:4px;"></div>
+          </div>
+        </td>
+      </tr>'''
+
+        # 卡死事件统计
+        event_counts = stats.get('stuck_event_counts', {})
+        event_rows = ''
+        for sid, count in sorted(event_counts.items(), key=lambda x: x[1], reverse=True)[:10]:
+            pct = count / total_triggers * 100 if total_triggers > 0 else 0
+            event_rows += f'''
+      <tr>
+        <td style="padding:4px 8px;color:#ccc;font-size:12px;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">{sid}</td>
+        <td style="padding:4px 8px;font-size:12px;">{count} 次 ({pct:.1f}%%)</td>
+        <td style="padding:4px 8px;width:35%%;">
+          <div style="background:#1a1a2e;border-radius:4px;height:8px;overflow:hidden;">
+            <div style="background:#e94560;height:100%%;width:{pct}%%;border-radius:4px;"></div>
+          </div>
+        </td>
+      </tr>'''
+
+        # 当前样本库分析
+        analysis_rows = ''
+        for skey, samples in self.analyzer.strategy_samples.items():
+            if skey == '_unmatched':
+                continue
+            sname = strategies.get(skey, {}).get('name', skey)
+            analysis_rows += f'''
+      <tr>
+        <td style="padding:4px 8px;color:#ccc;font-size:12px;">{sname}</td>
+        <td style="padding:4px 8px;font-size:12px;">{len(samples)}</td>
+      </tr>'''
+
+        html = f'''<div style="background:#1a1a2e;color:#e0e0e0;padding:20px;font-family:'Microsoft YaHei',sans-serif;">
+  <div style="background:#16213e;border-radius:12px;padding:20px;margin-bottom:16px;">
+    <h2 style="color:#4ecca3;margin:0 0 8px 0;">📊 运行统计报告</h2>
+    <p style="color:#aaa;margin:0;font-size:13px;">SMD游戏监控程序 V{self.VERSION} | {now_str}</p>
+  </div>
+{screenshot_html}
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">⏱ 基本统计</h3>
+    <table style="width:100%%;border-collapse:collapse;font-size:14px;">
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">运行时间</td><td style="padding:8px;border-bottom:1px solid #1a1a2e;">{self._fmt_time(runtime)}</td></tr>
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">当前轮数</td><td style="padding:8px;border-bottom:1px solid #1a1a2e;">{round_text}</td></tr>
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">轮数效率</td><td style="padding:8px;border-bottom:1px solid #1a1a2e;">{rounds_per_hour:.1f} 轮/时</td></tr>
+      <tr><td style="padding:8px;color:#aaa;border-bottom:1px solid #1a1a2e;">已触发策略数</td><td style="padding:8px;color:#e94560;font-weight:bold;border-bottom:1px solid #1a1a2e;">{total_triggers} 次</td></tr>
+      <tr><td style="padding:8px;color:#aaa;">触发频率</td><td style="padding:8px;">{tph:.1f} 次/时</td></tr>
+    </table>
+  </div>
+
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">📋 策略触发占比</h3>
+    <table style="width:100%%;border-collapse:collapse;">
+      <tr style="color:#888;font-size:11px;">
+        <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">策略名称</th>
+        <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">触发次数</th>
+        <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">占比</th>
+        <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #1a1a2e;"></th>
+      </tr>
+      {strategy_rows if strategy_rows else '<tr><td style="padding:8px;color:#666;" colspan="4">暂无触发记录</td></tr>'}
+    </table>
+  </div>
+
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">🔍 卡死事件占比</h3>
+    <table style="width:100%%;border-collapse:collapse;">
+      <tr style="color:#888;font-size:11px;">
+        <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">事件ID</th>
+        <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">次数</th>
+        <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #1a1a2e;"></th>
+      </tr>
+      {event_rows if event_rows else '<tr><td style="padding:8px;color:#666;" colspan="3">暂无卡死记录</td></tr>'}
+    </table>
+  </div>
+
+  <div style="background:#0f3460;border-radius:12px;padding:16px;margin-bottom:16px;">
+    <h3 style="color:#53a8b6;margin:0 0 12px 0;">📈 当前样本库</h3>
+    <table style="width:100%%;border-collapse:collapse;">
+      <tr style="color:#888;font-size:11px;">
+        <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">策略</th>
+        <th style="padding:4px 8px;text-align:left;border-bottom:1px solid #1a1a2e;">窗口内样本数</th>
+      </tr>
+      {analysis_rows if analysis_rows else '<tr><td style="padding:8px;color:#666;" colspan="2">暂无样本</td></tr>'}
+    </table>
+  </div>
+
+  <div style="text-align:center;padding:12px;color:#666;font-size:12px;">
+    SMD游戏监控程序 V{self.VERSION}
+  </div>
+</div>'''
+        return html
+
+    def _send_stats_report(self):
+        """发送运行统计报告（定期调用）"""
+        if not self.config.alert.get('stats_report_enabled', False):
+            return
+        # 检查是否有可用的推送渠道
+        if not (self.config.alert.get('pushplus_enabled', False) or
+                self.config.alert.get('email_enabled', False)):
+            return
+
+        from datetime import datetime
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M')
+        html_content = self._build_stats_report_html()
+        title = f"📊 运行统计报告 - {now_str}"
+        logging.info(f"[统计报告] 开始发送: {title}")
+
+        # 直接复用 _send_alert 的发送逻辑，但不受报警冷却限制
+        alert_cfg = self.config.alert
+        plain_text = self._html_to_plain(html_content)
+
+        def _send_pushplus():
+            if not alert_cfg.get('pushplus_enabled', False):
+                return
+            token = alert_cfg.get('pushplus_token', '')
+            if not token:
+                return
+            import json, urllib.request
+            try:
+                url = 'http://www.pushplus.plus/send'
+                data = json.dumps({
+                    'token': token, 'title': title,
+                    'content': html_content,
+                    'template': 'html'
+                }).encode('utf-8')
+                req = urllib.request.Request(url, data=data,
+                                              headers={'Content-Type': 'application/json'},
+                                              method='POST')
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    result = resp.read().decode('utf-8')
+                    logging.info(f"[统计报告-PushPlus] 发送成功")
+            except Exception as e:
+                logging.error(f"[统计报告-PushPlus] 发送失败: {e}")
+
+        def _send_email():
+            if not alert_cfg.get('email_enabled', False):
+                return
+            smtp_server = alert_cfg.get('email_smtp_server', '')
+            smtp_port = int(alert_cfg.get('email_smtp_port', 465))
+            use_ssl = alert_cfg.get('email_use_ssl', True)
+            user = alert_cfg.get('email_user', '')
+            password = alert_cfg.get('email_password', '')
+            to_addr = alert_cfg.get('email_to', '')
+            if not all([smtp_server, user, password, to_addr]):
+                return
+            try:
+                import smtplib
+                from email.mime.text import MIMEText
+                from email.header import Header
+                msg = MIMEText(plain_text, 'plain', 'utf-8')
+                msg['Subject'] = Header(title, 'utf-8')
+                msg['From'] = user
+                msg['To'] = to_addr
+                if use_ssl:
+                    with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=10) as server:
+                        server.login(user, password)
+                        server.sendmail(user, [to_addr], msg.as_string())
+                else:
+                    with smtplib.SMTP(smtp_server, smtp_port, timeout=10) as server:
+                        server.starttls()
+                        server.login(user, password)
+                        server.sendmail(user, [to_addr], msg.as_string())
+                logging.info(f"[统计报告-邮件] 发送成功 -> {to_addr}")
+            except Exception as e:
+                logging.error(f"[统计报告-邮件] 发送失败: {e}")
+
+        import threading
+        threading.Thread(target=_send_pushplus, daemon=True).start()
+        threading.Thread(target=_send_email, daemon=True).start()
+
     def _emergency_stop(self):
         self.emergency_stop_triggered = True
         logging.error("=" * 60)
@@ -947,13 +1487,17 @@ class StrategyEngine:
 
         # 发送报警
         stats = self.get_stats()
-        content = (
-            f"检测到脚本完全卡死，已执行紧急停止。\n"
-            f"运行时间: {self._fmt_time(stats['runtime'])}\n"
-            f"总触发次数: {stats['total_triggers']}\n"
-            f"触发频率: {stats['triggers_per_hour']:.1f} 次/时"
+        html_content = self._build_alert_html(
+            trigger_count=self.trigger_count,
+            detect_window=0,
+            threshold=0,
+            stats=stats,
+            strategy_name="紧急停止",
+            stuck_type="emergency",
+            stuck_ids=[],
+            result=None
         )
-        self._send_alert("游戏监控-紧急停止", content)
+        self._send_alert("游戏监控-紧急停止", html_content)
 
         max_attempts = 10
         for attempt in range(1, max_attempts + 1):
@@ -991,13 +1535,15 @@ class GameMonitor:
         has_file_handler = any(isinstance(h, logging.FileHandler) for h in root_logger.handlers)
         if not has_file_handler:
             fh = logging.FileHandler(log_file, encoding='utf-8')
-            fh.setLevel(logging.INFO)
+            fh.setLevel(logging.DEBUG)
             fh.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(message)s'))
             root_logger.addHandler(fh)
 
         self.screen_capture = ScreenCapture(self.config)
         self.ocr_engine = OCREngine(self.config)
         self.executor = ActionExecutor(self.config)
+        # 将图床API key传递给executor
+        self.executor._imgbb_api_key = self.config.alert.get('imgbb_api_key', '')
         self.frequency_analyzer = FrequencyAnalyzer(self.config)
         self.analyzer = self.frequency_analyzer
         self.strategy_engine = StrategyEngine(self.config, self.executor, self.frequency_analyzer,
@@ -1007,10 +1553,18 @@ class GameMonitor:
         self.current_script_id = ""
         self.stable_count = 0
 
+        # 统计报告追踪
+        self._last_stats_report_time = 0
+        self._round_events = {}  # {轮数: 时间戳}
+        self._last_known_round = None
+
     def start(self):
         self.strategy_engine.monitor_start_time = time.time()
         self.strategy_engine.total_trigger_count = 0
         self.strategy_engine.trigger_history = []
+        self._last_stats_report_time = time.time()
+        self._round_events = {}
+        self._last_known_round = None
 
         self._setup_screenshot_dir()
 
@@ -1074,6 +1628,20 @@ class GameMonitor:
                 raw_result = self.ocr_engine.recognize(screenshot)
                 logging.debug(f"[_monitor_loop] OCR完成，结果长度={len(raw_result)}")
 
+                # 追踪轮数变化
+                for line in raw_result.split('\n'):
+                    line = line.strip()
+                    if '当前轮数' in line:
+                        import re
+                        m = re.search(r'当前轮数[-\s]*(\d+)', line)
+                        if m:
+                            new_round = int(m.group(1))
+                            if new_round != self._last_known_round:
+                                if self._last_known_round is not None:
+                                    self._round_events[new_round] = time.time()
+                                self._last_known_round = new_round
+                        break
+
                 if raw_result == self.current_script_id or not self.current_script_id:
                     self.stable_count += 1
                 else:
@@ -1086,10 +1654,21 @@ class GameMonitor:
                 result = self.analyzer.analyze()
                 now = time.time()
                 if not hasattr(self, '_last_status_print') or now - self._last_status_print >= 5:
-                    counts_str = ', '.join([f"{k}={v}" for k, v in list(result['counts'].items())[:5]])
-                    queue_info = ', '.join([f"{k}={len(v)}" for k, v in self.analyzer.strategy_samples.items() if k != '_unmatched'])
-                    logging.info(f"[统计] {queue_info} | {counts_str} | {result['details']}")
                     self._last_status_print = now
+                    queue_info = ', '.join([f"{k}={len(v)}" for k, v in self.analyzer.strategy_samples.items() if k != '_unmatched'])
+                    if result.get('is_stuck') and result.get('results'):
+                        details_list = [r.get('details', '') for r in result['results']]
+                        details_str = ' | '.join(details_list)
+                    else:
+                        total_samples = result.get('total_samples', sum(len(s) for s in self.analyzer.strategy_samples.values()))
+                        details_str = result.get('details', f'样本不足或未达到阈值 (总样本{total_samples})')
+                    logging.info(f"[统计] {queue_info} | {details_str}")
+
+                # 定期发送统计报告
+                stats_interval = int(self.config.alert.get('stats_report_interval', 60)) * 60
+                if stats_interval > 0 and now - self._last_stats_report_time >= stats_interval:
+                    self._last_stats_report_time = now
+                    self.strategy_engine._send_stats_report()
 
                 sleep_steps = max(1, int(check_interval / 0.1))
                 for _ in range(sleep_steps):
@@ -1099,9 +1678,8 @@ class GameMonitor:
                     time.sleep(0.1)
 
             except Exception as e:
-                logging.error(f"监控循环异常: {e}")
                 import traceback
-                logging.debug(traceback.format_exc())
+                logging.error(f"监控循环异常: {e}\n{traceback.format_exc()}")
 
         logging.info(f"[_monitor_loop] 循环已退出，共执行{loop_count}轮")
 

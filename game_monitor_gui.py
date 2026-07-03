@@ -517,7 +517,7 @@ class StrategyEditorDialog:
 
         self.dialog = tk.Toplevel(parent)
         self.dialog.title("编辑策略")
-        self.dialog.geometry("650x620")
+        self.dialog.geometry("650x800")
         self.dialog.resizable(False, False)
         self.dialog.transient(parent)
         self.dialog.grab_set()
@@ -531,7 +531,7 @@ class StrategyEditorDialog:
     def _build_ui(self):
         # 底部确定/取消按钮（先pack，确保始终可见）
         ok_frame = tk.Frame(self.dialog)
-        ok_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=10)
+        ok_frame.pack(side=tk.BOTTOM, fill=tk.X, padx=10, pady=2)
 
         tk.Button(ok_frame, text="确定", command=self._on_ok,
                   width=10, bg='#4CAF50', fg='white', font=('微软雅黑', 10)).pack(side=tk.RIGHT, padx=5)
@@ -625,8 +625,25 @@ class StrategyEditorDialog:
         tk.Entry(row, textvariable=self.alternating_ratio_var, width=8).pack(side=tk.LEFT, padx=5)
         tk.Label(row, text="(如25 / 0.85)", fg='gray').pack(side=tk.LEFT)
 
+        row = tk.Frame(threshold_frame)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text="严重程度系数:", width=15, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.severity_var = tk.StringVar(value=str(self.strategy.get('severity', '')))
+        tk.Entry(row, textvariable=self.severity_var, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Label(row, text="(空=默认1.0, 移动类=1, 限时打怪=2等, 报警按总系数触发)", fg='gray').pack(side=tk.LEFT)
+
+        row = tk.Frame(threshold_frame)
+        row.pack(fill=tk.X, pady=2)
+        tk.Label(row, text="统计窗口(秒):", width=15, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.window_seconds_var = tk.StringVar(value=str(self.strategy.get('window_seconds', '')))
+        tk.Entry(row, textvariable=self.window_seconds_var, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Label(row, text="最小样本:", width=8, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.min_samples_var = tk.StringVar(value=str(self.strategy.get('min_samples', '')))
+        tk.Entry(row, textvariable=self.min_samples_var, width=8).pack(side=tk.LEFT, padx=5)
+        tk.Label(row, text="(空=使用全局默认值)", fg='gray').pack(side=tk.LEFT)
+
         # 动作列表（固定高度，不扩展）
-        actions_frame = tk.LabelFrame(content, text="动作序列", font=('微软雅黑', 10))
+        actions_frame = tk.LabelFrame(content, text="动作序列", font=('微软雅黑', 5))
         actions_frame.pack(fill=tk.X, padx=0, pady=5)
 
         # 动作操作按钮（先pack，确保不被listbox挤压）
@@ -651,7 +668,7 @@ class StrategyEditorDialog:
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
 
         self.actions_listbox = tk.Listbox(list_frame, yscrollcommand=scrollbar.set,
-                                          font=('Consolas', 10), height=6)
+                                          font=('Consolas', 10), height=10)
         self.actions_listbox.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.config(command=self.actions_listbox.yview)
 
@@ -795,6 +812,19 @@ class StrategyEditorDialog:
             strategy['alternating_threshold'] = int(at)
         if ar:
             strategy['alternating_ratio'] = float(ar)
+
+        # 严重程度系数
+        sev = self.severity_var.get().strip()
+        if sev:
+            strategy['severity'] = float(sev)
+
+        # 统计窗口和最小样本（空值不保存，使用全局默认）
+        ws = self.window_seconds_var.get().strip()
+        if ws:
+            strategy['window_seconds'] = int(ws)
+        ms = self.min_samples_var.get().strip()
+        if ms:
+            strategy['min_samples'] = int(ms)
 
         self.dirty = False
         self.result = (strategy_key, strategy)
@@ -1034,13 +1064,15 @@ class FloatingStatsWindow:
 class GameMonitorGUI:
     """游戏监控GUI主界面"""
 
-    VERSION = "1.0.1"
+    VERSION = "1.1.0"
     AUTHOR = "重楼一叶"
     PAN_LINK = "https://qj2smd.ysepan.com/"
     PAN_PASSWORD = "1234"
     GITHUB_LINK = "https://github.com/coralfox/smd_game_monitor"
     UPDATE_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/version.txt"
     GITEE_UPDATE_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/version.txt"
+    CHANGELOG_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/CHANGELOG.html"
+    GITEE_CHANGELOG_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/CHANGELOG.html"
     WECHAT_PAY_URL = "wxp://f2f0sSU1dBcu_SftrSutvSM9dVK1LasDZnOShA4l10NmCY4"       # 你的微信收款链接
     ALIPAY_PAY_URL = "https://qr.alipay.com/fkx10172eaxgrkqw2wlbtd3?t=1782895171528"  # 你的支付宝收款链接
 
@@ -1185,16 +1217,33 @@ class GameMonitorGUI:
             },
             "strategies": {
                 "single_stuck": {
-                    "name": "单一卡死处理",
-                    "description": "当检测到单一事件卡死时执行",
+                    "name": "单一移动卡死处理",
+                    "description": "当检测到单一移动事件卡死时执行（60秒窗口，快速响应）",
                     "match_ids": ["当前事件", "移动"],
                     "exclude_ids": [],
                     "match_stuck_type": "single",
+                    "severity": 1.0,
                     "actions": [
                         {"type": "screenshot"},
                         {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
                     ],
                     "stuck_threshold": 30,
+                    "stuck_ratio": 0.8
+                },
+                "action_stuck": {
+                    "name": "事件动作卡死处理",
+                    "description": "当检测到非移动类事件卡死时执行（5分钟窗口，容忍限时打怪等长处理）",
+                    "match_ids": ["当前事件"],
+                    "exclude_ids": ["移动"],
+                    "match_stuck_type": "single",
+                    "severity": 1.0,
+                    "window_seconds": 300,
+                    "min_samples": 100,
+                    "actions": [
+                        {"type": "screenshot"},
+                        {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
+                    ],
+                    "stuck_threshold": 200,
                     "stuck_ratio": 0.8
                 },
                 "alternating_stuck": {
@@ -1203,6 +1252,7 @@ class GameMonitorGUI:
                     "match_ids": ["当前事件"],
                     "exclude_ids": [],
                     "match_stuck_type": "alternating",
+                    "severity": 2.0,
                     "actions": [
                         {"type": "screenshot"},
                         {"type": "delay", "seconds": 1.0},
@@ -1217,6 +1267,7 @@ class GameMonitorGUI:
                     "match_ids": ["路劲", "错误", "开头"],
                     "exclude_ids": [],
                     "match_stuck_type": "single",
+                    "severity": 2.0,
                     "actions": [
                         {"type": "screenshot"},
                         {"type": "delay", "seconds": 1.0},
@@ -1227,10 +1278,11 @@ class GameMonitorGUI:
                 },
                 "no_bounty_stuck": {
                     "name": "无悬赏卡死处理",
-                    "description": "当未检测到悬赏时，如果发生单一卡死则执行",
+                    "description": "当前事件单一卡死且没有悬赏执行时触发，说明脚本未运行",
                     "match_ids": [],
                     "exclude_ids": ["悬赏执行"],
                     "match_stuck_type": "single",
+                    "severity": 1.0,
                     "actions": [
                         {"type": "screenshot"},
                         {"type": "delay", "seconds": 1.0},
@@ -1249,7 +1301,11 @@ class GameMonitorGUI:
                 "email_smtp_server": "smtp.qq.com", "email_smtp_port": 465, "email_use_ssl": True,
                 "email_user": "", "email_password": "", "email_to": "",
                 "alert_cooldown_minutes": 15,
-                "alert_trigger_threshold": 6
+                "alert_trigger_threshold": 6,
+                "alert_severity_threshold": 10,
+                "imgbb_api_key": "",
+                "stats_report_enabled": False,
+                "stats_report_interval": 60
             }
         }
 
@@ -1284,7 +1340,10 @@ class GameMonitorGUI:
         # 标签页4: 日志
         self._build_log_tab()
 
-        # 标签页5: 关于
+        # 标签页5: 更新记录
+        self._build_changelog_tab()
+
+        # 标签页6: 关于
         self._build_about_tab()
 
     def _build_monitor_tab(self):
@@ -1443,43 +1502,48 @@ class GameMonitorGUI:
         tk.Checkbutton(ui_row, text="显示悬浮信息", variable=self.show_floating_var,
                        font=('微软雅黑', 10), command=self._toggle_floating).pack(side=tk.LEFT, padx=20)
 
-        # OCR信息（放在最下面，并排显示）
-        ocr_row = tk.Frame(params_frame)
-        ocr_row.pack(fill=tk.X, pady=3)
-        tk.Label(ocr_row, text="OCR识别:", font=('微软雅黑', 10), fg='#666').pack(side=tk.LEFT, padx=(5, 2))
-        tk.Label(ocr_row, text="多行同时统计", font=('微软雅黑', 10), fg='#4CAF50').pack(side=tk.LEFT, padx=(0, 15))
-        tk.Label(ocr_row, text="OCR引擎:", font=('微软雅黑', 10), fg='#666').pack(side=tk.LEFT, padx=(0, 2))
-        tk.Label(ocr_row, text="RapidOCR (中文)", font=('微软雅黑', 10), fg='#4CAF50').pack(side=tk.LEFT)
+        # ===== 报警核心参数 =====
+        core_frame = tk.LabelFrame(tab, text="报警核心参数", font=('微软雅黑', 10))
+        core_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        # ===== 报警配置 =====
-        alert_frame = tk.LabelFrame(tab, text="报警配置（触发过多时发送）", font=('微软雅黑', 10))
-        alert_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        # 报警参数（冷却、阈值、检测时间）
-        param_row = tk.Frame(alert_frame)
-        param_row.pack(fill=tk.X, pady=3)
-        tk.Label(param_row, text="报警冷却(分钟):", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(5, 2))
+        core_row = tk.Frame(core_frame)
+        core_row.pack(fill=tk.X, pady=4)
+        tk.Label(core_row, text="报警冷却:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(5, 2))
         self.alert_cooldown_var = tk.StringVar(value='15')
-        tk.Entry(param_row, textvariable=self.alert_cooldown_var, width=5,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(param_row, text="触发报警阈值(次):", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
+        tk.Entry(core_row, textvariable=self.alert_cooldown_var, width=5,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(core_row, text="分钟", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT, padx=(0, 15))
+
+        tk.Label(core_row, text="检测窗口系数:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
         self.alert_trigger_threshold_var = tk.StringVar(value='6')
-        tk.Entry(param_row, textvariable=self.alert_trigger_threshold_var, width=5,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 10))
-        tk.Label(param_row, text="报警检测时间:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
+        tk.Entry(core_row, textvariable=self.alert_trigger_threshold_var, width=5,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(core_row, text="×", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
+
+        tk.Label(core_row, text="严重度阈值:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(15, 2))
+        self.alert_severity_threshold_var = tk.StringVar(value='10')
+        tk.Entry(core_row, textvariable=self.alert_severity_threshold_var, width=5,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(core_row, text="(累计系数)", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
+
+        time_row = tk.Frame(core_frame)
+        time_row.pack(fill=tk.X, pady=2)
+        tk.Label(time_row, text="报警检测时间:", font=('微软雅黑', 10), anchor='e', width=12).pack(side=tk.LEFT, padx=(5, 2))
         self.alert_detect_time_var = tk.StringVar(value='计算中...')
-        tk.Label(param_row, textvariable=self.alert_detect_time_var,
+        tk.Label(time_row, textvariable=self.alert_detect_time_var,
                  font=('Consolas', 10), fg='#1565C0').pack(side=tk.LEFT, padx=2)
         # 绑定数值变化时自动重新计算
         self.alert_trigger_threshold_var.trace_add('write', lambda *a: self._update_alert_detect_time())
+        self.alert_severity_threshold_var.trace_add('write', lambda *a: self._update_alert_detect_time())
         self.freq_vars['cooldown_seconds'].trace_add('write', lambda *a: self._update_alert_detect_time())
 
-        # 分隔线
-        tk.Frame(alert_frame, height=1, bg='#ccc').pack(fill=tk.X, padx=5, pady=5)
+        # ===== 推送渠道 =====
+        channel_frame = tk.LabelFrame(tab, text="推送渠道", font=('微软雅黑', 10))
+        channel_frame.pack(fill=tk.X, padx=10, pady=5)
 
         # PushPlus
-        pp_row = tk.Frame(alert_frame)
-        pp_row.pack(fill=tk.X, pady=2)
+        pp_row = tk.Frame(channel_frame)
+        pp_row.pack(fill=tk.X, pady=3)
         self.pushplus_enabled_var = tk.BooleanVar(value=False)
         tk.Checkbutton(pp_row, text="PushPlus", variable=self.pushplus_enabled_var,
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
@@ -1490,11 +1554,8 @@ class GameMonitorGUI:
         tk.Button(pp_row, text="测试发送", command=self._test_pushplus,
                   width=8, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=10)
 
-        # 分隔线
-        tk.Frame(alert_frame, height=1, bg='#ccc').pack(fill=tk.X, padx=5, pady=5)
-
         # 邮件
-        em_row1 = tk.Frame(alert_frame)
+        em_row1 = tk.Frame(channel_frame)
         em_row1.pack(fill=tk.X, pady=2)
         self.email_enabled_var = tk.BooleanVar(value=False)
         tk.Checkbutton(em_row1, text="邮件", variable=self.email_enabled_var,
@@ -1503,7 +1564,7 @@ class GameMonitorGUI:
         self.email_smtp_var = tk.StringVar(value='smtp.qq.com')
         tk.Entry(em_row1, textvariable=self.email_smtp_var, width=16,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(em_row1, text="端口:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(5, 2))
+        tk.Label(em_row1, text="端口:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(8, 2))
         self.email_port_var = tk.StringVar(value='465')
         tk.Entry(em_row1, textvariable=self.email_port_var, width=6,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
@@ -1511,18 +1572,18 @@ class GameMonitorGUI:
         tk.Checkbutton(em_row1, text="SSL", variable=self.email_ssl_var,
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
 
-        em_row2 = tk.Frame(alert_frame)
+        em_row2 = tk.Frame(channel_frame)
         em_row2.pack(fill=tk.X, pady=2)
         tk.Label(em_row2, text="发件邮箱:", font=('微软雅黑', 10), width=8, anchor='e').pack(side=tk.LEFT, padx=5)
         self.email_user_var = tk.StringVar(value='')
         tk.Entry(em_row2, textvariable=self.email_user_var, width=22,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(em_row2, text="密码/授权码:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(5, 2))
+        tk.Label(em_row2, text="密码/授权码:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(15, 2))
         self.email_pass_var = tk.StringVar(value='')
         tk.Entry(em_row2, textvariable=self.email_pass_var, width=18,
                  font=('Consolas', 10), show='*').pack(side=tk.LEFT, padx=2)
 
-        em_row3 = tk.Frame(alert_frame)
+        em_row3 = tk.Frame(channel_frame)
         em_row3.pack(fill=tk.X, pady=2)
         tk.Label(em_row3, text="收件邮箱:", font=('微软雅黑', 10), width=8, anchor='e').pack(side=tk.LEFT, padx=5)
         self.email_to_var = tk.StringVar(value='')
@@ -1531,41 +1592,32 @@ class GameMonitorGUI:
         tk.Button(em_row3, text="测试发送邮件", command=self._test_email,
                   width=10, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=10)
 
-        # 检测逻辑说明（带滚动条）
-        info_frame = tk.LabelFrame(tab, text="检测逻辑说明", font=('微软雅黑', 11))
-        info_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # ===== 高级功能 =====
+        adv_frame = tk.LabelFrame(tab, text="高级功能", font=('微软雅黑', 10))
+        adv_frame.pack(fill=tk.X, padx=10, pady=5)
 
-        info_scroll = tk.Scrollbar(info_frame)
-        info_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        # imgbb 图床 API Key
+        ibb_row = tk.Frame(adv_frame)
+        ibb_row.pack(fill=tk.X, pady=3)
+        tk.Label(ibb_row, text="图床Key:", font=('微软雅黑', 10), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
+        tk.Label(ibb_row, text="ImgBB", font=('微软雅黑', 9)).pack(side=tk.LEFT)
+        self.imgbb_api_key_var = tk.StringVar(value='')
+        tk.Entry(ibb_row, textvariable=self.imgbb_api_key_var, width=35,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(ibb_row, text="(可选,用于报警截图推送)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=5)
 
-        info_text_widget = tk.Text(info_frame, wrap=tk.WORD, font=('微软雅黑', 10),
-                                    fg='#333', padx=10, pady=10, height=8,
-                                    yscrollcommand=info_scroll.set)
-        info_text_widget.pack(fill=tk.BOTH, expand=True)
-        info_scroll.config(command=info_text_widget.yview)
-
-        info_content = """卡脚本检测逻辑:
-
-1. 单一编号卡死检测:
-   在统计窗口时间内，如果某个编号出现次数 >= 策略阈值
-   且该编号占该策略样本的比例 >= 策略占比，则判定为卡死。
-   (阈值和占比在每个策略中独立配置)
-
-2. 双编号交替检测:
-   在统计窗口时间内，如果两个编号合计出现次数 >= 策略阈值
-   且这两个编号占该策略样本的比例 >= 策略占比，则判定为交替卡死。
-   (仅 match_stuck_type=alternating 的策略启用)
-
-3. 触发冷却:
-   触发一次策略后，在冷却时间内不会重复触发同一策略。
-   (全局配置，所有策略共用)
-
-示例配置:
-   - 统计窗口: 60秒
-   - 最小样本数: 20
-   - 冷却时间: 10秒"""
-        info_text_widget.insert(tk.END, info_content)
-        info_text_widget.config(state=tk.DISABLED)
+        # 统计报告配置
+        sr_row1 = tk.Frame(adv_frame)
+        sr_row1.pack(fill=tk.X, pady=2)
+        self.stats_report_enabled_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(sr_row1, text="启用定期统计报告推送", variable=self.stats_report_enabled_var,
+                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+        tk.Label(sr_row1, text="间隔:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(15, 2))
+        self.stats_report_interval_var = tk.StringVar(value='60')
+        tk.Entry(sr_row1, textvariable=self.stats_report_interval_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(sr_row1, text="分钟", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
+        tk.Label(sr_row1, text="(需启用PushPlus或邮件)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=10)
 
     def _build_strategies_tab(self):
         tab = tk.Frame(self.notebook)
@@ -1671,6 +1723,108 @@ class GameMonitorGUI:
         tk.Button(btn_frame, text="全部显示", command=self._show_all_levels,
                   width=12).pack(side=tk.LEFT, padx=5)
 
+    def _build_changelog_tab(self):
+        tab = tk.Frame(self.notebook)
+        self.notebook.add(tab, text=" 更新记录 ")
+
+        # 顶部源选择 + 刷新
+        ctrl_frame = tk.Frame(tab)
+        ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        self.changelog_source_var = tk.StringVar(value='auto')
+        tk.Label(ctrl_frame, text="源:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(0, 5))
+        tk.Radiobutton(ctrl_frame, text="自动(竞速)", variable=self.changelog_source_var,
+                       value='auto', font=('微软雅黑', 9)).pack(side=tk.LEFT)
+        tk.Radiobutton(ctrl_frame, text="GitHub", variable=self.changelog_source_var,
+                       value='github', font=('微软雅黑', 9)).pack(side=tk.LEFT)
+        tk.Radiobutton(ctrl_frame, text="Gitee", variable=self.changelog_source_var,
+                       value='gitee', font=('微软雅黑', 9)).pack(side=tk.LEFT)
+
+        self.changelog_status_var = tk.StringVar(value="点击刷新获取更新记录...")
+        tk.Label(ctrl_frame, textvariable=self.changelog_status_var,
+                 font=('微软雅黑', 9), fg='#666').pack(side=tk.LEFT, padx=(20, 5))
+
+        tk.Button(ctrl_frame, text="刷新", command=self._load_changelog,
+                  width=8, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.RIGHT, padx=5)
+
+        # HtmlFrame 显示区域（100% 还原 HTML/CSS）
+        try:
+            from tkinterweb import HtmlFrame
+            self.changelog_html = HtmlFrame(tab, messages_enabled=False)
+            self.changelog_html.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        except Exception as e:
+            self._log(f"[更新记录] HtmlFrame 加载失败: {e}")
+            self.changelog_status_var.set("渲染引擎加载失败")
+            return
+
+        # 首次自动加载
+        self.root.after(1500, self._load_changelog)
+
+    def _load_changelog(self):
+        """双源竞速获取 CHANGELOG.html"""
+        import threading
+        import urllib.request
+
+        self.changelog_status_var.set("正在获取更新记录...")
+        source = self.changelog_source_var.get()
+
+        result_event = threading.Event()
+        result_holder = {'content': None, 'source': None}
+
+        def _fetch(url, name):
+            if result_event.is_set():
+                return
+            try:
+                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    content = resp.read().decode('utf-8')
+                if content and not result_event.is_set():
+                    result_holder['content'] = content
+                    result_holder['source'] = name
+                    result_event.set()
+            except Exception:
+                pass
+
+        def _on_result():
+            result_event.wait(timeout=15)
+            content = result_holder.get('content')
+            src = result_holder.get('source', 'unknown')
+            self.root.after(0, lambda: self._display_changelog(content, src))
+
+        if source in ('auto', 'github'):
+            threading.Thread(target=_fetch, args=(self.CHANGELOG_URL, "GitHub"), daemon=True).start()
+        if source in ('auto', 'gitee'):
+            threading.Thread(target=_fetch, args=(self.GITEE_CHANGELOG_URL, "Gitee"), daemon=True).start()
+        threading.Thread(target=_on_result, daemon=True).start()
+
+    def _display_changelog(self, content: str, source: str):
+        if not hasattr(self, 'changelog_html'):
+            return
+        if content:
+            self.changelog_html.load_html(content)
+            self.changelog_status_var.set(f"已加载 (来自 {source})")
+        else:
+            # 加载失败时显示本地备份
+            local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CHANGELOG.html')
+            if os.path.isfile(local_path):
+                try:
+                    self.changelog_html.load_file(local_path)
+                    self.changelog_status_var.set("已加载本地备份 (网络不可用)")
+                except Exception:
+                    self.changelog_html.load_html(f'<html><body style="font-family:Microsoft YaHei;padding:20px;">'
+                                                  f'<p>无法加载更新记录。</p>'
+                                                  f'<p>请检查网络连接，或访问:</p>'
+                                                  f'<a href="{self.GITHUB_LINK}">{self.GITHUB_LINK}</a>'
+                                                  f'</body></html>')
+                    self.changelog_status_var.set("加载失败")
+            else:
+                self.changelog_html.load_html(f'<html><body style="font-family:Microsoft YaHei;padding:20px;">'
+                                              f'<p>无法加载更新记录。</p>'
+                                              f'<p>请检查网络连接，或访问:</p>'
+                                              f'<a href="{self.GITHUB_LINK}">{self.GITHUB_LINK}</a>'
+                                              f'</body></html>')
+                self.changelog_status_var.set("加载失败")
+
     def _build_about_tab(self):
 
         tab = tk.Frame(self.notebook)
@@ -1696,6 +1850,10 @@ class GameMonitorGUI:
         # ===== 链接按钮 =====
         link_frame = tk.Frame(tab)
         link_frame.pack(pady=5)
+
+        tk.Button(link_frame, text="使用说明", width=12, font=('微软雅黑', 10),
+                bg='#2196F3', fg='white',
+                command=lambda: self._open_link('https://devfile.cn/preview/s0j6dt63/smdyouxijiankongchengxushiyongshuoming.html')).pack(side=tk.LEFT, padx=5)
 
         pan_text = f"访问网盘 (密码:{self.PAN_PASSWORD})" if self.PAN_PASSWORD else "访问网盘"
         tk.Button(link_frame, text=pan_text, width=20, font=('微软雅黑', 10),
@@ -2011,7 +2169,11 @@ class GameMonitorGUI:
         self.email_pass_var.set(alert.get('email_password', ''))
         self.email_to_var.set(alert.get('email_to', ''))
         self.alert_cooldown_var.set(str(alert.get('alert_cooldown_minutes', 15)))
+        self.imgbb_api_key_var.set(alert.get('imgbb_api_key', ''))
+        self.stats_report_enabled_var.set(alert.get('stats_report_enabled', False))
+        self.stats_report_interval_var.set(str(alert.get('stats_report_interval', 60)))
         self.alert_trigger_threshold_var.set(str(alert.get('alert_trigger_threshold', 6)))
+        self.alert_severity_threshold_var.set(str(alert.get('alert_severity_threshold', 10)))
         self._update_alert_detect_time()
 
         # 加载策略列表
@@ -2099,7 +2261,11 @@ class GameMonitorGUI:
                 'email_password': self.email_pass_var.get().strip(),
                 'email_to': self.email_to_var.get().strip(),
                 'alert_cooldown_minutes': int(self.alert_cooldown_var.get() or 15),
-                'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6)
+                'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6),
+                'alert_severity_threshold': int(self.alert_severity_threshold_var.get() or 10),
+                'imgbb_api_key': self.imgbb_api_key_var.get().strip(),
+                'stats_report_enabled': self.stats_report_enabled_var.get(),
+                'stats_report_interval': int(self.stats_report_interval_var.get() or 60)
             }
 
             self._save_config()
@@ -2229,7 +2395,11 @@ class GameMonitorGUI:
             'email_password': self.email_pass_var.get().strip(),
             'email_to': self.email_to_var.get().strip(),
             'alert_cooldown_minutes': int(self.alert_cooldown_var.get() or 15),
-            'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6)
+            'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6),
+            'alert_severity_threshold': int(self.alert_severity_threshold_var.get() or 10),
+            'imgbb_api_key': self.imgbb_api_key_var.get().strip(),
+            'stats_report_enabled': self.stats_report_enabled_var.get(),
+            'stats_report_interval': int(self.stats_report_interval_var.get() or 60)
         }
 
         self._save_config()
@@ -2378,11 +2548,11 @@ class GameMonitorGUI:
         self._topmost_timer_id = self.root.after(30000, self._topmost_tick)
 
     def _update_alert_detect_time(self):
-        """根据触发冷却和阈值计算报警检测时间"""
+        """根据触发冷却和严重度阈值计算报警检测时间"""
         try:
             cooldown = int(self.freq_vars['cooldown_seconds'].get() or 30)
-            threshold = int(self.alert_trigger_threshold_var.get() or 6)
-            detect_seconds = cooldown * threshold * 2
+            severity = int(self.alert_severity_threshold_var.get() or 10)
+            detect_seconds = cooldown * severity * 2
             if detect_seconds >= 60:
                 self.alert_detect_time_var.set(f"{detect_seconds // 60}分{detect_seconds % 60}秒 ({detect_seconds}秒)")
             else:

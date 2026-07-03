@@ -15,3 +15,6 @@ SMD游戏监控程序使用说明.md
 一键打包.bat
 configs/测试.json
 SMD游戏监控程序使用说明.assets/
+hook-onnxruntime.py
+CHANGELOG.md
+build_version.py

@@ -18,3 +18,7 @@ SMD游戏监控程序使用说明.assets/
 hook-onnxruntime.py
 CHANGELOG.md
 build_version.py
+game_monitor_recovered.py
+logs/
+SMD配置/
+异常/

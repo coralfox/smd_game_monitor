@@ -26,6 +26,16 @@
         "min_samples": 20,
         "cooldown_seconds": 30
     },
+    "adaptive": {
+        "enabled": true,
+        "warmup_seconds": 300,
+        "verification_window": 30,
+        "adjust_cooldown": 60,
+        "max_adjustments": 20,
+        "margin_threshold": 0.05,
+        "oscillation_threshold": 0.5,
+        "oscillation_freeze_seconds": 1800
+    },
     "strategies": {
         "single_stuck": {
             "name": "单一移动卡死处理",
@@ -35,6 +45,7 @@
             "match_stuck_type": "single",
             "severity": 1.0,
             "actions": [
+                {"type": "release_keys", "keys": "w,a,s,d,ctrl"},
                 {"type": "screenshot"},
                 {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
             ],
@@ -51,6 +62,7 @@
             "window_seconds": 300,
             "min_samples": 100,
             "actions": [
+                {"type": "release_keys", "keys": "w,a,s,d,ctrl"},
                 {"type": "screenshot"},
                 {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
             ],
@@ -65,6 +77,7 @@
             "match_stuck_type": "alternating",
             "severity": 2.0,
             "actions": [
+                {"type": "release_keys", "keys": "w,a,s,d,ctrl"},
                 {"type": "screenshot"},
                 {"type": "delay", "seconds": 1.0},
                 {"type": "key_press", "key": "p", "presses": 2, "interval": 0.5}
@@ -80,6 +93,7 @@
             "match_stuck_type": "single",
             "severity": 2.0,
             "actions": [
+                {"type": "release_keys", "keys": "w,a,s,d,ctrl"},
                 {"type": "screenshot"},
                 {"type": "delay", "seconds": 1.0},
                 {"type": "key_press", "key": "p", "presses": 1}
@@ -95,6 +109,7 @@
             "match_stuck_type": "single",
             "severity": 1.0,
             "actions": [
+                {"type": "release_keys", "keys": "w,a,s,d,ctrl"},
                 {"type": "screenshot"},
                 {"type": "delay", "seconds": 1.0},
                 {"type": "key_press", "key": "p", "presses": 1}
@@ -103,12 +118,20 @@
             "stuck_ratio": 0.8
         }
     },
+    "idle_settings": {
+        "enabled": false,
+        "stop_after_minutes": 0,
+        "stop_at_time": "",
+        "stop_after_rounds": 0
+    },
+    "stats_report_time": {
+        "enabled": false,
+        "start_time": "00:00",
+        "end_time": "24:00"
+    },
     "logging": {
         "level": "INFO",
-        "log_to_file": true,
-        "log_file": "game_monitor.log",
-        "save_screenshots": true,
-        "screenshot_dir": "screenshots"
+        "log_to_file": true
     },
     "hotkeys": {
         "start_stop": "F8",

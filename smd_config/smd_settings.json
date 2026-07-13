@@ -1,0 +1,123 @@
+{
+  "draw": {
+    "items": [],
+    "extra": {}
+  },
+  "player": {
+    "items": [],
+    "extra": {}
+  },
+  "aim": {
+    "items": [],
+    "extra": {}
+  },
+  "global_time": {
+    "items": [
+      {
+        "name": "开启全局",
+        "ocr_label": "开启全局",
+        "item_type": "toggle",
+        "target_value": "开启",
+        "value_set_method": "click"
+      }
+    ],
+    "extra": {}
+  },
+  "manual": {
+    "items": [
+      {
+        "name": "加载参数",
+        "ocr_label": "加载基础参数",
+        "item_type": "action",
+        "target_value": "",
+        "value_set_method": "click"
+      }
+    ],
+    "extra": {}
+  },
+  "bounty": {
+    "items": [],
+    "extra": {}
+  },
+  "rogue": {
+    "items": [],
+    "extra": {}
+  },
+  "nuclear": {
+    "items": [],
+    "extra": {}
+  },
+  "drop_filter": {
+    "items": [
+      {
+        "name": "载入掉落筛选配置",
+        "ocr_label": "载入",
+        "item_type": "action",
+        "target_value": "",
+        "value_set_method": "click"
+      },
+      {
+        "name": "无动作拾取",
+        "ocr_label": "无动作分解捡起",
+        "item_type": "toggle",
+        "target_value": "开启",
+        "value_set_method": "click"
+      },
+      {
+        "name": "筛选规则选择",
+        "ocr_label": "自动动作",
+        "item_type": "dropdown",
+        "target_value": "拾取筛选物资其余分解",
+        "value_set_method": "click"
+      },
+      {
+        "name": "勾选显示",
+        "ocr_label": "显示",
+        "item_type": "toggle",
+        "target_value": "开启",
+        "value_set_method": "click"
+      },
+      {
+        "name": "切换到仓库",
+        "ocr_label": "仓库",
+        "item_type": "action",
+        "target_value": "",
+        "value_set_method": "click"
+      },
+      {
+        "name": "勾选-分解-枪械",
+        "ocr_label": "背-枪械",
+        "item_type": "toggle",
+        "target_value": "开启",
+        "value_set_method": "click"
+      }
+    ],
+    "extra": {}
+  },
+  "script_edit": {
+    "items": [
+      {
+        "name": "刷新脚本文件",
+        "ocr_label": "刷新脚本文件",
+        "item_type": "action",
+        "target_value": "",
+        "value_set_method": "click"
+      },
+      {
+        "name": "按键前摇",
+        "ocr_label": "按键前摇",
+        "item_type": "slider",
+        "target_value": "0",
+        "value_set_method": "ctrl_click"
+      }
+    ],
+    "extra": {
+      "selected_script": "未找到匹配的脚本文件",
+      "script_type": "入侵"
+    }
+  },
+  "no_action": {
+    "items": [],
+    "extra": {}
+  }
+}

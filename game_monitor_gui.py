@@ -311,8 +311,8 @@ class ActionEditorDialog:
         '按下键': {'type': 'key_down', 'fields': [
             ('key', '按键', 'entry')
         ]},
-        '释放键': {'type': 'key_up', 'fields': [
-            ('key', '按键', 'entry')
+        '释放键': {'type': 'release_keys', 'fields': [
+            ('keys', '按键(逗号分隔)', 'entry')
         ]},
         '组合键': {'type': 'key_combo', 'fields': [
             ('keys', '按键列表(逗号分隔)', 'entry')
@@ -689,8 +689,8 @@ class StrategyEditorDialog:
             return f"按键 {action.get('key', '')} x{action.get('presses', 1)}"
         elif action_type == 'key_down':
             return f"按下 {action.get('key', '')}"
-        elif action_type == 'key_up':
-            return f"释放 {action.get('key', '')}"
+        elif action_type == 'release_keys':
+            return f"释放 {action.get('keys', '')}"
         elif action_type == 'key_combo':
             return f"{'+'.join(action.get('keys', []))}"
         elif action_type == 'type_text':
@@ -868,33 +868,72 @@ class FloatingStatsWindow:
                  fg='#e94560', bg='#1a1a2e').pack(anchor='w')
         tk.Frame(self.content, height=1, bg='#e94560').pack(fill=tk.X, pady=(2, 6))
 
-        # 运行时间
-        self.runtime_var = tk.StringVar(value='运行时间: 00:00:00')
-        tk.Label(self.content, textvariable=self.runtime_var, font=('Consolas', 10),
-                 fg='#eaeaea', bg='#1a1a2e').pack(anchor='w', pady=1)
+        # 运行时间 + 状态（同一行）
+        row0 = tk.Frame(self.content, bg='#1a1a2e')
+        row0.pack(fill=tk.X, pady=1)
+        self.runtime_var = tk.StringVar(value='运行: 00:00:00')
+        tk.Label(row0, textvariable=self.runtime_var, font=('Consolas', 10),
+                 fg='#eaeaea', bg='#1a1a2e').pack(side=tk.LEFT)
+        self.status_var = tk.StringVar(value='运行中')
+        self.status_label = tk.Label(row0, textvariable=self.status_var, font=('Consolas', 10),
+                 fg='#00ff88', bg='#1a1a2e')
+        self.status_label.pack(side=tk.RIGHT)
 
-        # 总触发数
-        self.total_var = tk.StringVar(value='总触发: 0')
-        tk.Label(self.content, textvariable=self.total_var, font=('Consolas', 10),
-                 fg='#eaeaea', bg='#1a1a2e').pack(anchor='w', pady=1)
+        # 总触发 / 触发频率（同一行）
+        row1 = tk.Frame(self.content, bg='#1a1a2e')
+        row1.pack(fill=tk.X, pady=1)
+        self.total_var = tk.StringVar(value='总触发:0')
+        tk.Label(row1, textvariable=self.total_var, font=('Consolas', 10),
+                 fg='#eaeaea', bg='#1a1a2e').pack(side=tk.LEFT)
+        self.tph_var = tk.StringVar(value='触发频率:0.0次/时')
+        tk.Label(row1, textvariable=self.tph_var, font=('Consolas', 10),
+                 fg='#00d9ff', bg='#1a1a2e').pack(side=tk.RIGHT)
 
-        # 触发频率
-        self.tph_var = tk.StringVar(value='触发频率: 0.0 次/时')
-        tk.Label(self.content, textvariable=self.tph_var, font=('Consolas', 10),
-                 fg='#00d9ff', bg='#1a1a2e').pack(anchor='w', pady=1)
-
-        # 运行状态
-        self.status_var = tk.StringVar(value='状态: 运行中')
-        tk.Label(self.content, textvariable=self.status_var, font=('Consolas', 10),
-                 fg='#00ff88', bg='#1a1a2e').pack(anchor='w', pady=1)
+        # 总轮数 / 每轮用时（同一行，去掉轮频率）
+        row2 = tk.Frame(self.content, bg='#1a1a2e')
+        row2.pack(fill=tk.X, pady=1)
+        self.rounds_var = tk.StringVar(value='总轮数:0')
+        tk.Label(row2, textvariable=self.rounds_var, font=('Consolas', 10),
+                 fg='#eaeaea', bg='#1a1a2e').pack(side=tk.LEFT)
+        self.avg_round_var = tk.StringVar(value='均时:0秒')
+        tk.Label(row2, textvariable=self.avg_round_var, font=('Consolas', 10),
+                 fg='#a0e7a0', bg='#1a1a2e').pack(side=tk.RIGHT)
 
         # 分隔线
         tk.Frame(self.content, height=1, bg='#444').pack(fill=tk.X, pady=(6, 4))
 
+        # 自适应状态（根据配置开关显示/隐藏）
+        self.adaptive_frame = tk.Frame(self.content, bg='#1a1a2e')
+        self.adaptive_frame.pack(fill=tk.X, pady=1)
+        tk.Label(self.adaptive_frame, text='自适应', font=('微软雅黑', 10, 'bold'),
+                 fg='#4ecca3', bg='#1a1a2e').pack(side=tk.LEFT)
+        self.adaptive_status_var = tk.StringVar(value='[ON]')
+        self.adaptive_status_label = tk.Label(self.adaptive_frame, textvariable=self.adaptive_status_var,
+                                              font=('Consolas', 9), fg='#00ff88', bg='#1a1a2e')
+        self.adaptive_status_label.pack(side=tk.LEFT, padx=4)
+        self.adaptive_detail_var = tk.StringVar(value='误报:0 漏报:0 | 参数正常')
+        self.adaptive_detail_label = tk.Label(self.adaptive_frame, textvariable=self.adaptive_detail_var, font=('Consolas', 9),
+                 fg='#aaa', bg='#1a1a2e')
+        self.adaptive_detail_label.pack(side=tk.LEFT, padx=2)
+
+        # 倒计时信息（根据设置动态显示）
+        self.countdown_frame = tk.Frame(self.content, bg='#1a1a2e')
+        self.countdown_frame.pack(fill=tk.X, pady=1)
+        self.countdown_var = tk.StringVar(value='')
+        tk.Label(self.countdown_frame, textvariable=self.countdown_var, font=('Consolas', 9),
+                 fg='#e94560', bg='#1a1a2e').pack(anchor='w')
+
         # 快捷键
         tk.Label(self.content, text='快捷键', font=('微软雅黑', 10, 'bold'),
                  fg='#ff9f43', bg='#1a1a2e').pack(anchor='w')
-        tk.Label(self.content, text='F8=开始/停止  F10=暂停/恢复',
+        # 从配置读取实际热键
+        hk_start = 'F8'
+        hk_pause = 'F10'
+        if self.gui.config_data:
+            hk = self.gui.config_data.get('hotkeys', {})
+            hk_start = hk.get('start_stop', 'F8')
+            hk_pause = hk.get('pause_resume', 'F10')
+        tk.Label(self.content, text=f'{hk_start}=开始/停止  {hk_pause}=暂停/恢复',
                  font=('Consolas', 9), fg='#ccc', bg='#1a1a2e', justify=tk.LEFT).pack(anchor='w')
 
         # 分隔线
@@ -908,7 +947,7 @@ class FloatingStatsWindow:
         log_frame = tk.Frame(self.content, bg='#1a1a2e')
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
 
-        self.log_text = tk.Text(log_frame, height=8, width=42, font=('Consolas', 9),
+        self.log_text = tk.Text(log_frame, height=5, width=42, font=('Consolas', 9),
                                 bg='#16213e', fg='#ccc', wrap=tk.NONE,
                                 state=tk.DISABLED, relief=tk.SOLID, bd=1)
         self.log_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
@@ -931,8 +970,16 @@ class FloatingStatsWindow:
         self.window = None
 
     def add_log(self, message: str):
-        """添加一条关键日志"""
-        self._logs.append(message)
+        """添加一条关键日志（精简显示：月日时分秒 + 内容，去掉级别）"""
+        import re
+        # 匹配 "2026-07-03 12:53:00,155 [ERROR] xxx" 格式
+        m = re.search(r'(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),\d+\s*\[[A-Z]+\]\s*(.*)', message)
+        if m:
+            # MMdd HHmmss + 内容
+            short = f"{m.group(2)}{m.group(3)} {m.group(4)}{m.group(5)}{m.group(6)} {m.group(7)[:40]}"
+        else:
+            short = message[:55]
+        self._logs.append(short)
         if len(self._logs) > self._max_logs:
             self._logs.pop(0)
 
@@ -1004,23 +1051,79 @@ class FloatingStatsWindow:
         hours = rt // 3600
         mins = (rt % 3600) // 60
         secs = rt % 60
-        self.runtime_var.set(f'运行时间: {hours:02d}:{mins:02d}:{secs:02d}')
-        self.total_var.set(f"总触发: {stats['total_triggers']}")
-        self.tph_var.set(f"触发频率: {stats['triggers_per_hour']:.1f} 次/时")
+        self.runtime_var.set(f'运行: {hours}时{mins:02d}分{secs:02d}秒')
+        self.total_var.set(f"总触发:{stats['total_triggers']}")
+        self.tph_var.set(f"触发频率:{stats['triggers_per_hour']:.1f}次/时")
+
+        # 轮数统计
+        self.rounds_var.set(f"总轮数:{stats.get('total_rounds', 0)}")
+        avg_rt = stats.get('avg_round_time', 0.0)
+        if avg_rt >= 60:
+            self.avg_round_var.set(f"均时:{avg_rt/60:.1f}分")
+        else:
+            self.avg_round_var.set(f"均时:{avg_rt:.0f}秒")
 
         # 更新运行状态
         if self.gui.game_monitor:
             if self.gui.game_monitor.paused:
-                self.status_var.set('状态: 已暂停')
+                self.status_var.set('已暂停')
+                self.status_label.config(fg='#ff9f43')
             elif self.gui.monitor_running:
-                self.status_var.set('状态: 运行中')
+                self.status_var.set('运行中')
+                self.status_label.config(fg='#00ff88')
             else:
-                self.status_var.set('状态: 已停止')
+                self.status_var.set('已停止')
+                self.status_label.config(fg='#e94560')
         else:
             self.status_var.set('状态: 已停止')
 
+        # 更新自适应状态（根据配置开关显示/隐藏）
+        if self.gui.config_data and self.gui.config_data.get('adaptive', {}).get('enabled', True):
+            self.adaptive_frame.pack(fill=tk.X, pady=1)
+            if self.gui.game_monitor and hasattr(self.gui.game_monitor, 'adaptive_tuner'):
+                tuner = self.gui.game_monitor.adaptive_tuner
+                if tuner:
+                    astats = tuner.get_adaptive_stats()
+                    if astats['enabled']:
+                        self.adaptive_status_var.set('[ON]')
+                        self.adaptive_status_label.config(fg='#00ff88')
+                    else:
+                        self.adaptive_status_var.set('[OFF]')
+                        self.adaptive_status_label.config(fg='#666')
+                    detail = f"误报:{astats['fp_count']} 漏报:{astats['fn_count']} | {astats['changes_str']}{astats['frozen']}"
+                    self.adaptive_detail_var.set(detail)
+        else:
+            self.adaptive_frame.pack_forget()
+
+        # 更新倒计时信息（根据挂机设置显示）
+        idle_cfg = self.gui.config_data.get('idle_settings', {}) if self.gui.config_data else {}
+        countdown_parts = []
+        if idle_cfg.get('enabled', False):
+            max_mins = idle_cfg.get('stop_after_minutes', 0)
+            max_rounds = idle_cfg.get('stop_after_rounds', 0)
+            max_execs = idle_cfg.get('stop_after_executions', 0)
+            stop_at = idle_cfg.get('stop_at_time', '')
+            if self.gui.game_monitor and self.gui.monitor_start_time:
+                elapsed = time.time() - self.gui.monitor_start_time
+                if max_mins > 0:
+                    remain = max(max_mins * 60 - elapsed, 0)
+                    m, s = divmod(int(remain), 60)
+                    countdown_parts.append(f"时间剩余:{m}分{s}秒")
+            if max_rounds > 0:
+                total_rounds = len(self.gui.game_monitor._round_events) if self.gui.game_monitor else 0
+                countdown_parts.append(f"轮数:{total_rounds}/{max_rounds}")
+            if max_execs > 0:
+                total_execs = stats.get('total_triggers', 0)
+                countdown_parts.append(f"次数:{total_execs}/{max_execs}")
+            if stop_at:
+                countdown_parts.append(f"停止于:{stop_at}")
+        if countdown_parts:
+            self.countdown_var.set(' | '.join(countdown_parts))
+            self.countdown_frame.pack(fill=tk.X, pady=1)
+        else:
+            self.countdown_frame.pack_forget()
+
         # 仅在日志发生变化时才更新日志文本
-        current_logs_hash = id(self._logs)  # 用引用检测变化
         if self._logs != self._last_logs:
             self._last_logs = list(self._logs)
             self.log_text.config(state=tk.NORMAL)
@@ -1029,7 +1132,7 @@ class FloatingStatsWindow:
                 for msg in self._logs:
                     self.log_text.insert(tk.END, msg + '\n')
             else:
-                self.log_text.insert(tk.END, '暂无关键日志...\n')
+                self.log_text.insert(tk.END, '暂无关键日志\n')
             self.log_text.config(state=tk.DISABLED)
 
         # 跟随游戏窗口位置（仅在位置变化时才更新）
@@ -1304,6 +1407,7 @@ class GameMonitorGUI:
                 "alert_trigger_threshold": 6,
                 "alert_severity_threshold": 10,
                 "imgbb_api_key": "",
+                "imgbb_expiration_days": 7,
                 "stats_report_enabled": False,
                 "stats_report_interval": 60
             }
@@ -1334,7 +1438,10 @@ class GameMonitorGUI:
         # 标签页2: 频率检测
         self._build_frequency_tab()
 
-        # 标签页3: 策略管理
+        # 标签页3: 重启原力
+        self._build_restart_tab()
+
+        # 标签页4: 策略管理
         self._build_strategies_tab()
 
         # 标签页4: 日志
@@ -1492,7 +1599,7 @@ class GameMonitorGUI:
         self.freq_vars['cooldown_seconds'] = tk.StringVar(value='30')
         tk.Entry(row, textvariable=self.freq_vars['cooldown_seconds'], width=6).pack(side=tk.LEFT, padx=(0, 5))
 
-        # UI选项
+        # UI选项 + 自适应 + 快捷键
         ui_row = tk.Frame(params_frame)
         ui_row.pack(fill=tk.X, pady=3)
         self.always_on_top_var = tk.BooleanVar(value=False)
@@ -1500,124 +1607,350 @@ class GameMonitorGUI:
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
         self.show_floating_var = tk.BooleanVar(value=True)
         tk.Checkbutton(ui_row, text="显示悬浮信息", variable=self.show_floating_var,
-                       font=('微软雅黑', 10), command=self._toggle_floating).pack(side=tk.LEFT, padx=20)
+                       font=('微软雅黑', 10), command=self._toggle_floating).pack(side=tk.LEFT, padx=15)
+        self.adaptive_enabled_var = tk.BooleanVar(value=True)
+        tk.Checkbutton(ui_row, text="自适应调整", variable=self.adaptive_enabled_var,
+                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=15)
 
-        # ===== 报警核心参数 =====
+        # 快捷键设置（按键捕捉）
+        tk.Label(ui_row, text="开始/停止:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(30, 2))
+        self.hotkey_start_var = tk.StringVar(value='F8')
+        self.hotkey_start_label = tk.Label(ui_row, textvariable=self.hotkey_start_var,
+                                           font=('Consolas', 10, 'bold'), fg='#1565C0',
+                                           width=8, anchor='center')
+        self.hotkey_start_label.pack(side=tk.LEFT, padx=2)
+        tk.Button(ui_row, text="设置", width=5, font=('微软雅黑', 9),
+                  command=lambda: self._capture_hotkey('start')).pack(side=tk.LEFT, padx=2)
+
+        tk.Label(ui_row, text="暂停/恢复:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.hotkey_pause_var = tk.StringVar(value='F10')
+        self.hotkey_pause_label = tk.Label(ui_row, textvariable=self.hotkey_pause_var,
+                                           font=('Consolas', 10, 'bold'), fg='#1565C0',
+                                           width=8, anchor='center')
+        self.hotkey_pause_label.pack(side=tk.LEFT, padx=2)
+        self.hotkey_pause_btn = tk.Button(ui_row, text="设置", width=5, font=('微软雅黑', 9),
+                                          command=lambda: self._capture_hotkey('pause'))
+        self.hotkey_pause_btn.pack(side=tk.LEFT, padx=2)
+
+        # ===== 报警核心参数（含推送渠道、高级功能、统计报告时间窗口） =====
         core_frame = tk.LabelFrame(tab, text="报警核心参数", font=('微软雅黑', 10))
         core_frame.pack(fill=tk.X, padx=10, pady=5)
 
+        # 行1: 报警冷却 + 检测窗口系数 + 严重度阈值 + 检测时间
         core_row = tk.Frame(core_frame)
-        core_row.pack(fill=tk.X, pady=4)
+        core_row.pack(fill=tk.X, pady=2)
         tk.Label(core_row, text="报警冷却:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(5, 2))
         self.alert_cooldown_var = tk.StringVar(value='15')
         tk.Entry(core_row, textvariable=self.alert_cooldown_var, width=5,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
-        tk.Label(core_row, text="分钟", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT, padx=(0, 15))
+        tk.Label(core_row, text="分", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT, padx=(0, 12))
 
-        tk.Label(core_row, text="检测窗口系数:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
+        tk.Label(core_row, text="窗口系数:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
         self.alert_trigger_threshold_var = tk.StringVar(value='6')
         tk.Entry(core_row, textvariable=self.alert_trigger_threshold_var, width=5,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
-        tk.Label(core_row, text="×", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
+        tk.Label(core_row, text="×", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT, padx=(0, 12))
 
-        tk.Label(core_row, text="严重度阈值:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(15, 2))
+        tk.Label(core_row, text="严重度:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(0, 2))
         self.alert_severity_threshold_var = tk.StringVar(value='10')
         tk.Entry(core_row, textvariable=self.alert_severity_threshold_var, width=5,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=(0, 2))
-        tk.Label(core_row, text="(累计系数)", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
-
-        time_row = tk.Frame(core_frame)
-        time_row.pack(fill=tk.X, pady=2)
-        tk.Label(time_row, text="报警检测时间:", font=('微软雅黑', 10), anchor='e', width=12).pack(side=tk.LEFT, padx=(5, 2))
+        tk.Label(core_row, text="检测时间:", font=('微软雅黑', 10), anchor='e').pack(side=tk.LEFT, padx=(10, 2))
         self.alert_detect_time_var = tk.StringVar(value='计算中...')
-        tk.Label(time_row, textvariable=self.alert_detect_time_var,
+        tk.Label(core_row, textvariable=self.alert_detect_time_var,
                  font=('Consolas', 10), fg='#1565C0').pack(side=tk.LEFT, padx=2)
         # 绑定数值变化时自动重新计算
         self.alert_trigger_threshold_var.trace_add('write', lambda *a: self._update_alert_detect_time())
         self.alert_severity_threshold_var.trace_add('write', lambda *a: self._update_alert_detect_time())
         self.freq_vars['cooldown_seconds'].trace_add('write', lambda *a: self._update_alert_detect_time())
 
-        # ===== 推送渠道 =====
-        channel_frame = tk.LabelFrame(tab, text="推送渠道", font=('微软雅黑', 10))
-        channel_frame.pack(fill=tk.X, padx=10, pady=5)
+        # 分隔线
+        tk.Frame(core_frame, height=1, bg='#ccc').pack(fill=tk.X, padx=5, pady=(4, 2))
 
-        # PushPlus
-        pp_row = tk.Frame(channel_frame)
-        pp_row.pack(fill=tk.X, pady=3)
+        # 行2: PushPlus
+        pp_row = tk.Frame(core_frame)
+        pp_row.pack(fill=tk.X, pady=1)
         self.pushplus_enabled_var = tk.BooleanVar(value=False)
         tk.Checkbutton(pp_row, text="PushPlus", variable=self.pushplus_enabled_var,
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
-        tk.Label(pp_row, text="Token:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(10, 2))
+        pp_link = tk.Label(pp_row, text="(官网)", font=('微软雅黑', 9, 'underline'),
+                           fg='#1565C0', cursor='hand2')
+        pp_link.pack(side=tk.LEFT, padx=2)
+        pp_link.bind('<Button-1>', lambda e: os.startfile('https://www.pushplus.plus/'))
+        tk.Label(pp_row, text="Token:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(4, 2))
         self.pushplus_token_var = tk.StringVar(value='')
-        tk.Entry(pp_row, textvariable=self.pushplus_token_var, width=35,
+        tk.Entry(pp_row, textvariable=self.pushplus_token_var, width=32,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Button(pp_row, text="测试发送", command=self._test_pushplus,
-                  width=8, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=10)
+        tk.Button(pp_row, text="测试", command=self._test_pushplus,
+                  width=6, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=6)
 
-        # 邮件
-        em_row1 = tk.Frame(channel_frame)
-        em_row1.pack(fill=tk.X, pady=2)
+        # 行3: 邮件第1行 (SMTP + 端口 + SSL + 测试按钮)
+        em_row1 = tk.Frame(core_frame)
+        em_row1.pack(fill=tk.X, pady=1)
         self.email_enabled_var = tk.BooleanVar(value=False)
         tk.Checkbutton(em_row1, text="邮件", variable=self.email_enabled_var,
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
-        tk.Label(em_row1, text="SMTP:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(10, 2))
+        tk.Label(em_row1, text="SMTP:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(4, 2))
         self.email_smtp_var = tk.StringVar(value='smtp.qq.com')
-        tk.Entry(em_row1, textvariable=self.email_smtp_var, width=16,
+        tk.Entry(em_row1, textvariable=self.email_smtp_var, width=14,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(em_row1, text="端口:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(8, 2))
+        tk.Label(em_row1, text="端口:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(6, 2))
         self.email_port_var = tk.StringVar(value='465')
-        tk.Entry(em_row1, textvariable=self.email_port_var, width=6,
+        tk.Entry(em_row1, textvariable=self.email_port_var, width=5,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
         self.email_ssl_var = tk.BooleanVar(value=True)
         tk.Checkbutton(em_row1, text="SSL", variable=self.email_ssl_var,
-                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+                       font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=4)
+        tk.Button(em_row1, text="测试", command=self._test_email,
+                  width=6, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=8)
 
-        em_row2 = tk.Frame(channel_frame)
-        em_row2.pack(fill=tk.X, pady=2)
-        tk.Label(em_row2, text="发件邮箱:", font=('微软雅黑', 10), width=8, anchor='e').pack(side=tk.LEFT, padx=5)
+        # 行4: 邮件第2行 (发件邮箱 + 密码 + 收件邮箱)
+        em_row2 = tk.Frame(core_frame)
+        em_row2.pack(fill=tk.X, pady=1)
+        tk.Label(em_row2, text="发件:", font=('微软雅黑', 9), anchor='e').pack(side=tk.LEFT, padx=(5, 2))
         self.email_user_var = tk.StringVar(value='')
-        tk.Entry(em_row2, textvariable=self.email_user_var, width=22,
+        tk.Entry(em_row2, textvariable=self.email_user_var, width=18,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(em_row2, text="密码/授权码:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(15, 2))
+        tk.Label(em_row2, text="密码:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(6, 2))
         self.email_pass_var = tk.StringVar(value='')
-        tk.Entry(em_row2, textvariable=self.email_pass_var, width=18,
+        tk.Entry(em_row2, textvariable=self.email_pass_var, width=14,
                  font=('Consolas', 10), show='*').pack(side=tk.LEFT, padx=2)
-
-        em_row3 = tk.Frame(channel_frame)
-        em_row3.pack(fill=tk.X, pady=2)
-        tk.Label(em_row3, text="收件邮箱:", font=('微软雅黑', 10), width=8, anchor='e').pack(side=tk.LEFT, padx=5)
+        tk.Label(em_row2, text="收件:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(6, 2))
         self.email_to_var = tk.StringVar(value='')
-        tk.Entry(em_row3, textvariable=self.email_to_var, width=22,
+        tk.Entry(em_row2, textvariable=self.email_to_var, width=18,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Button(em_row3, text="测试发送邮件", command=self._test_email,
-                  width=10, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=10)
 
-        # ===== 高级功能 =====
-        adv_frame = tk.LabelFrame(tab, text="高级功能", font=('微软雅黑', 10))
-        adv_frame.pack(fill=tk.X, padx=10, pady=5)
+        # 分隔线
+        tk.Frame(core_frame, height=1, bg='#ccc').pack(fill=tk.X, padx=5, pady=(4, 2))
 
-        # imgbb 图床 API Key
-        ibb_row = tk.Frame(adv_frame)
-        ibb_row.pack(fill=tk.X, pady=3)
-        tk.Label(ibb_row, text="图床Key:", font=('微软雅黑', 10), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
-        tk.Label(ibb_row, text="ImgBB", font=('微软雅黑', 9)).pack(side=tk.LEFT)
-        self.imgbb_api_key_var = tk.StringVar(value='')
-        tk.Entry(ibb_row, textvariable=self.imgbb_api_key_var, width=35,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(ibb_row, text="(可选,用于报警截图推送)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=5)
+        # (图床Key已移动到统计报告推送行)
 
-        # 统计报告配置
-        sr_row1 = tk.Frame(adv_frame)
-        sr_row1.pack(fill=tk.X, pady=2)
+        # 行6: 定期统计报告推送 + 图床Key
+        sr_row = tk.Frame(core_frame)
+        sr_row.pack(fill=tk.X, pady=1)
         self.stats_report_enabled_var = tk.BooleanVar(value=False)
-        tk.Checkbutton(sr_row1, text="启用定期统计报告推送", variable=self.stats_report_enabled_var,
+        tk.Checkbutton(sr_row, text="定期统计报告推送", variable=self.stats_report_enabled_var,
                        font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
-        tk.Label(sr_row1, text="间隔:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(15, 2))
+        tk.Label(sr_row, text="间隔:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(8, 2))
         self.stats_report_interval_var = tk.StringVar(value='60')
-        tk.Entry(sr_row1, textvariable=self.stats_report_interval_var, width=6,
+        tk.Entry(sr_row, textvariable=self.stats_report_interval_var, width=6,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(sr_row1, text="分钟", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
-        tk.Label(sr_row1, text="(需启用PushPlus或邮件)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=10)
+        tk.Label(sr_row, text="分钟", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=2)
+        ibb_link = tk.Label(sr_row, text="imgbb图床Key:", font=('微软雅黑', 9, 'underline'),
+                            fg='#1565C0', cursor='hand2')
+        ibb_link.pack(side=tk.LEFT, padx=(15, 2))
+        ibb_link.bind('<Button-1>', lambda e: os.startfile('https://imgbb.com/'))
+        self.imgbb_api_key_var = tk.StringVar(value='')
+        tk.Entry(sr_row, textvariable=self.imgbb_api_key_var, width=22,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(sr_row, text="保存:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(6, 2))
+        self.imgbb_expiration_var = tk.StringVar(value='7')
+        tk.Spinbox(sr_row, from_=1, to=365, textvariable=self.imgbb_expiration_var, width=4,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT)
+        tk.Label(sr_row, text="天", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=2)
+
+        # 行7: 统计报告时间窗口
+        srt_row = tk.Frame(core_frame)
+        srt_row.pack(fill=tk.X, pady=1)
+        self.srt_enabled_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(srt_row, text="报告时间窗口", variable=self.srt_enabled_var,
+                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+        tk.Label(srt_row, text="时段:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(8, 2))
+        self.srt_start_hour_var = tk.StringVar(value='0')
+        self.srt_start_min_var = tk.StringVar(value='0')
+        tk.Spinbox(srt_row, from_=0, to=23, textvariable=self.srt_start_hour_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT)
+        tk.Label(srt_row, text=":", font=('微软雅黑', 10)).pack(side=tk.LEFT)
+        tk.Spinbox(srt_row, from_=0, to=59, textvariable=self.srt_start_min_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(srt_row, text="~", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=2)
+        self.srt_end_hour_var = tk.StringVar(value='23')
+        self.srt_end_min_var = tk.StringVar(value='59')
+        tk.Spinbox(srt_row, from_=0, to=23, textvariable=self.srt_end_hour_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT)
+        tk.Label(srt_row, text=":", font=('微软雅黑', 10)).pack(side=tk.LEFT)
+        tk.Spinbox(srt_row, from_=0, to=59, textvariable=self.srt_end_min_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Label(srt_row, text="(只在此时段内发送)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=4)
+
+        # ===== 挂机设置（紧凑布局） =====
+        idle_frame = tk.LabelFrame(tab, text="挂机设置", font=('微软雅黑', 10))
+        idle_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        idle_row = tk.Frame(idle_frame)
+        idle_row.pack(fill=tk.X, pady=3)
+        self.idle_enabled_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(idle_row, text="启用", variable=self.idle_enabled_var,
+                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+        tk.Label(idle_row, text="时间(分):", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.idle_minutes_var = tk.StringVar(value='0')
+        tk.Entry(idle_row, textvariable=self.idle_minutes_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(idle_row, text="停止时间:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.idle_stop_hour_var = tk.StringVar(value='0')
+        self.idle_stop_min_var = tk.StringVar(value='0')
+        tk.Spinbox(idle_row, from_=0, to=23, textvariable=self.idle_stop_hour_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT)
+        tk.Label(idle_row, text=":", font=('微软雅黑', 10)).pack(side=tk.LEFT)
+        tk.Spinbox(idle_row, from_=0, to=59, textvariable=self.idle_stop_min_var, width=3,
+                   font=('Consolas', 10), justify=tk.CENTER).pack(side=tk.LEFT, padx=(0, 4))
+        tk.Button(idle_row, text="×", font=('微软雅黑', 8), width=2,
+                  command=lambda: (self.idle_stop_hour_var.set('0'), self.idle_stop_min_var.set('0'))).pack(side=tk.LEFT)
+        tk.Label(idle_row, text="轮数:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.idle_rounds_var = tk.StringVar(value='0')
+        tk.Entry(idle_row, textvariable=self.idle_rounds_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(idle_row, text="次数:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.idle_execs_var = tk.StringVar(value='0')
+        tk.Entry(idle_row, textvariable=self.idle_execs_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(idle_row, text="(0=无限,到达后取消启用)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=5)
+
+        # (统计报告时间窗口已合并到报警核心参数中)
+
+    def _build_restart_tab(self):
+        """构建重启原力配置标签页"""
+        tab = tk.Frame(self.notebook)
+        self.notebook.add(tab, text=" 重启原力 ")
+
+        # 基本设置
+        basic_frame = tk.LabelFrame(tab, text="基本设置", font=('微软雅黑', 10))
+        basic_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        en_row = tk.Frame(basic_frame)
+        en_row.pack(fill=tk.X, pady=3)
+        self.restart_enabled_var = tk.BooleanVar(value=False)
+        tk.Checkbutton(en_row, text="启用自动重启", variable=self.restart_enabled_var,
+                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+
+        # bat文件路径
+        bat_row = tk.Frame(basic_frame)
+        bat_row.pack(fill=tk.X, pady=3)
+        tk.Label(bat_row, text="启动Bat:", font=('微软雅黑', 9), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_bat_var = tk.StringVar(value='')
+        tk.Entry(bat_row, textvariable=self.restart_bat_var, width=40,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Button(bat_row, text="浏览", width=5, font=('微软雅黑', 9),
+                  command=self._browse_bat).pack(side=tk.LEFT, padx=5)
+
+        # 游戏快捷方式
+        gs_row = tk.Frame(basic_frame)
+        gs_row.pack(fill=tk.X, pady=3)
+        tk.Label(gs_row, text="游戏快捷方式:", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_game_shortcut_var = tk.StringVar(value='')
+        tk.Entry(gs_row, textvariable=self.restart_game_shortcut_var, width=35,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Button(gs_row, text="浏览", width=5, font=('微软雅黑', 9),
+                  command=self._browse_game_shortcut).pack(side=tk.LEFT, padx=5)
+
+        # rundll32窗口信息
+        rd_row = tk.Frame(basic_frame)
+        rd_row.pack(fill=tk.X, pady=3)
+        tk.Label(rd_row, text="原力标题:", font=('微软雅黑', 9), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_rundll32_title_var = tk.StringVar(value='音乐盒子')
+        tk.Entry(rd_row, textvariable=self.restart_rundll32_title_var, width=20,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(rd_row, text="游戏标题:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        self.restart_game_title_var = tk.StringVar(value="Tom Clancy's The Division 2")
+        tk.Entry(rd_row, textvariable=self.restart_game_title_var, width=30,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+
+        # 触发条件
+        trigger_frame = tk.LabelFrame(tab, text="触发重启条件(策略触发)", font=('微软雅黑', 10))
+        trigger_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        tg_row = tk.Frame(trigger_frame)
+        tg_row.pack(fill=tk.X, pady=3)
+        tk.Label(tg_row, text="连续触发次数(不变回0):", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_burst_var = tk.StringVar(value='5')
+        tk.Entry(tg_row, textvariable=self.restart_burst_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(tg_row, text="冷却期间仍触发:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(15, 2))
+        self.restart_cooldown_trigger_var = tk.StringVar(value='10')
+        tk.Entry(tg_row, textvariable=self.restart_cooldown_trigger_var, width=6,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Label(tg_row, text="次", font=('微软雅黑', 9), fg='#888').pack(side=tk.LEFT)
+
+        # 按钮文字
+        btn_frame = tk.LabelFrame(tab, text="原力启动", font=('微软雅黑', 10))
+        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        # 播放按钮文字
+        pb_row = tk.Frame(btn_frame)
+        pb_row.pack(fill=tk.X, pady=2)
+        tk.Label(pb_row, text="播放按钮文字:", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_play_text_var = tk.StringVar(value='播放')
+        tk.Entry(pb_row, textvariable=self.restart_play_text_var, width=20,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+
+        # 清理按钮文字
+        cb_row = tk.Frame(btn_frame)
+        cb_row.pack(fill=tk.X, pady=2)
+        tk.Label(cb_row, text="清理按钮文字:", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_cleanup_text_var = tk.StringVar(value='清理歌曲播放')
+        tk.Entry(cb_row, textvariable=self.restart_cleanup_text_var, width=20,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+
+        # 等待文字
+        wait_row = tk.Frame(btn_frame)
+        wait_row.pack(fill=tk.X, pady=3)
+        tk.Label(wait_row, text="播放等待文字:", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_wait_text_var = tk.StringVar(value='等待歌曲启动后点击')
+        tk.Entry(wait_row, textvariable=self.restart_wait_text_var, width=30,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+
+        # SMD 配置编辑器
+        cfg_frame = tk.LabelFrame(tab, text="SMD 配置管理", font=('微软雅黑', 10))
+        cfg_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        op_row = tk.Frame(cfg_frame)
+        op_row.pack(fill=tk.X, pady=5)
+        tk.Button(op_row, text="打开 SMD 配置编辑器", font=('微软雅黑', 10),
+                  bg='#2196F3', fg='white', command=self._open_smd_editor).pack(side=tk.LEFT, padx=10)
+        tk.Button(op_row, text="测试重启流程", font=('微软雅黑', 10),
+                  bg='#FF9800', fg='white', command=self._test_restart).pack(side=tk.LEFT, padx=10)
+
+    def _browse_bat(self):
+        """选择bat文件"""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="选择启动Bat文件", filetypes=[("Bat文件", "*.bat"), ("所有文件", "*.*")])
+        if path:
+            self.restart_bat_var.set(path)
+
+    def _browse_game_shortcut(self):
+        """选择游戏快捷方式"""
+        from tkinter import filedialog
+        path = filedialog.askopenfilename(title="选择游戏快捷方式",
+                                          filetypes=[("快捷方式", "*.lnk"), ("所有文件", "*.*")])
+        if path:
+            self.restart_game_shortcut_var.set(path)
+
+    def _open_smd_editor(self):
+        """打开SMD配置编辑器"""
+        try:
+            from smd_config_editor import SMDConfigEditor
+            SMDConfigEditor(self.root, game_monitor_ref=self.game_monitor)
+        except Exception as e:
+            messagebox.showerror("错误", f"打开编辑器失败: {e}")
+
+    def _test_restart(self):
+        """测试重启流程（仅日志输出，不实际执行）"""
+        self._log("[重启] 测试模式 - 检查配置:")
+        bat = self.restart_bat_var.get().strip()
+        self._log(f"  Bat文件: {'✓' if bat and os.path.isfile(bat) else '✗ ' + ('未设置' if not bat else '文件不存在')}")
+        gs = self.restart_game_shortcut_var.get().strip()
+        if gs:
+            if '://' in gs:
+                self._log(f"  游戏快捷方式: ✓ {gs} (URL协议)")
+            elif os.path.isfile(gs):
+                self._log(f"  游戏快捷方式: ✓ {gs}")
+            else:
+                self._log(f"  游戏快捷方式: ✗ 无效 ({gs})")
+        else:
+            self._log("  游戏快捷方式: 未设置")
+        self._log(f"  原力标题: {self.restart_rundll32_title_var.get() or '未设置'}")
+        gt = self.restart_game_title_var.get() if hasattr(self, 'restart_game_title_var') else ''
+        self._log(f"  游戏标题: {gt or '未设置'}")
 
     def _build_strategies_tab(self):
         tab = tk.Frame(self.notebook)
@@ -2170,11 +2503,61 @@ class GameMonitorGUI:
         self.email_to_var.set(alert.get('email_to', ''))
         self.alert_cooldown_var.set(str(alert.get('alert_cooldown_minutes', 15)))
         self.imgbb_api_key_var.set(alert.get('imgbb_api_key', ''))
+        self.imgbb_expiration_var.set(str(alert.get('imgbb_expiration_days', 7)))
         self.stats_report_enabled_var.set(alert.get('stats_report_enabled', False))
         self.stats_report_interval_var.set(str(alert.get('stats_report_interval', 60)))
         self.alert_trigger_threshold_var.set(str(alert.get('alert_trigger_threshold', 6)))
         self.alert_severity_threshold_var.set(str(alert.get('alert_severity_threshold', 10)))
         self._update_alert_detect_time()
+
+        # 加载挂机设置
+        idle = self.config_data.get('idle_settings', {})
+        self.idle_enabled_var.set(idle.get('enabled', False))
+        self.idle_minutes_var.set(str(idle.get('stop_after_minutes', 0)))
+        self.idle_stop_hour_var.set('0')
+        self.idle_stop_min_var.set('0')
+        stop_at = idle.get('stop_at_time', '')
+        if stop_at and ':' in stop_at:
+            parts = stop_at.split(':')
+            self.idle_stop_hour_var.set(parts[0])
+            self.idle_stop_min_var.set(parts[1])
+        self.idle_rounds_var.set(str(idle.get('stop_after_rounds', 0)))
+        self.idle_execs_var.set(str(idle.get('stop_after_executions', 0)))
+
+        # 加载自适应配置
+        adaptive_cfg = self.config_data.get('adaptive', {})
+        self.adaptive_enabled_var.set(adaptive_cfg.get('enabled', True))
+
+        # 加载统计报告时间窗口
+        srt = self.config_data.get('stats_report_time', {})
+        self.srt_enabled_var.set(srt.get('enabled', False))
+        start_t = srt.get('start_time', '00:00')
+        end_t = srt.get('end_time', '24:00')
+        if ':' in start_t:
+            self.srt_start_hour_var.set(start_t.split(':')[0])
+            self.srt_start_min_var.set(start_t.split(':')[1])
+        if ':' in end_t:
+            self.srt_end_hour_var.set(end_t.split(':')[0])
+            self.srt_end_min_var.set(end_t.split(':')[1])
+
+        # 加载重启原力配置
+        rs = self.config_data.get('restart_settings', {})
+        self.restart_enabled_var.set(rs.get('enabled', False))
+        self.restart_bat_var.set(rs.get('bat_path', ''))
+        self.restart_rundll32_title_var.set(rs.get('rundll32_title', '音乐盒子'))
+        if hasattr(self, 'restart_game_title_var'):
+            self.restart_game_title_var.set(rs.get('game_title', "Tom Clancy's The Division 2"))
+        self.restart_play_text_var.set(rs.get('play_button_text', '播放'))
+        self.restart_wait_text_var.set(rs.get('play_wait_text', '等待歌曲启动后点击'))
+        self.restart_game_shortcut_var.set(rs.get('game_shortcut', ''))
+        self.restart_cleanup_text_var.set(rs.get('cleanup_button_text', '清理歌曲播放'))
+        self.restart_burst_var.set(str(rs.get('burst_trigger_count', 5)))
+        self.restart_cooldown_trigger_var.set(str(rs.get('cooldown_trigger_threshold', 10)))
+
+        # 加载热键配置
+        hotkeys = self.config_data.get('hotkeys', {})
+        self.hotkey_start_var.set(hotkeys.get('start_stop', 'F8'))
+        self.hotkey_pause_var.set(hotkeys.get('pause_resume', 'F10'))
 
         # 加载策略列表
         self._refresh_strategy_list()
@@ -2264,8 +2647,42 @@ class GameMonitorGUI:
                 'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6),
                 'alert_severity_threshold': int(self.alert_severity_threshold_var.get() or 10),
                 'imgbb_api_key': self.imgbb_api_key_var.get().strip(),
+                'imgbb_expiration_days': int(self.imgbb_expiration_var.get() or 7),
                 'stats_report_enabled': self.stats_report_enabled_var.get(),
                 'stats_report_interval': int(self.stats_report_interval_var.get() or 60)
+            }
+
+            # 保存热键、挂机设置、统计报告时间窗口
+            self.config_data['hotkeys'] = {
+                'start_stop': self.hotkey_start_var.get().strip() or 'F8',
+                'pause_resume': self.hotkey_pause_var.get().strip() or 'F10'
+            }
+            try:
+                idle_minutes = int(self.idle_minutes_var.get() or 0)
+            except ValueError:
+                idle_minutes = 0
+            try:
+                idle_rounds = int(self.idle_rounds_var.get() or 0)
+            except ValueError:
+                idle_rounds = 0
+            try:
+                idle_execs = int(self.idle_execs_var.get() or 0)
+            except ValueError:
+                idle_execs = 0
+            self.config_data['idle_settings'] = {
+                'enabled': self.idle_enabled_var.get(),
+                'stop_after_minutes': idle_minutes,
+                'stop_at_time': f"{self.idle_stop_hour_var.get().strip()}:{self.idle_stop_min_var.get().strip()}",
+                'stop_after_rounds': idle_rounds,
+                'stop_after_executions': idle_execs
+            }
+            self.config_data['adaptive'] = {
+                'enabled': self.adaptive_enabled_var.get()
+            }
+            self.config_data['stats_report_time'] = {
+                'enabled': self.srt_enabled_var.get(),
+                'start_time': f"{self.srt_start_hour_var.get().strip()}:{self.srt_start_min_var.get().strip()}",
+                'end_time': f"{self.srt_end_hour_var.get().strip()}:{self.srt_end_min_var.get().strip()}"
             }
 
             self._save_config()
@@ -2398,8 +2815,61 @@ class GameMonitorGUI:
             'alert_trigger_threshold': int(self.alert_trigger_threshold_var.get() or 6),
             'alert_severity_threshold': int(self.alert_severity_threshold_var.get() or 10),
             'imgbb_api_key': self.imgbb_api_key_var.get().strip(),
+            'imgbb_expiration_days': int(self.imgbb_expiration_var.get() or 7),
             'stats_report_enabled': self.stats_report_enabled_var.get(),
             'stats_report_interval': int(self.stats_report_interval_var.get() or 60)
+        }
+
+        # 保存重启原力配置
+        self.config_data['restart_settings'] = {
+            'enabled': self.restart_enabled_var.get(),
+            'bat_path': self.restart_bat_var.get().strip(),
+            'rundll32_title': self.restart_rundll32_title_var.get().strip(),
+            'game_title': self.restart_game_title_var.get().strip() if hasattr(self, 'restart_game_title_var') else '',
+            'play_button_text': self.restart_play_text_var.get().strip(),
+            'play_wait_text': self.restart_wait_text_var.get().strip(),
+            'game_shortcut': self.restart_game_shortcut_var.get().strip(),
+            'cleanup_button_text': self.restart_cleanup_text_var.get().strip(),
+            'burst_trigger_count': int(self.restart_burst_var.get() or 5),
+            'cooldown_trigger_threshold': int(self.restart_cooldown_trigger_var.get() or 10)
+        }
+
+        # 保存热键配置
+        self.config_data['hotkeys'] = {
+            'start_stop': self.hotkey_start_var.get().strip() or 'F8',
+            'pause_resume': self.hotkey_pause_var.get().strip() or 'F10'
+        }
+
+        # 保存挂机设置
+        try:
+            idle_minutes = int(self.idle_minutes_var.get() or 0)
+        except ValueError:
+            idle_minutes = 0
+        try:
+            idle_rounds = int(self.idle_rounds_var.get() or 0)
+        except ValueError:
+            idle_rounds = 0
+        try:
+            idle_execs = int(self.idle_execs_var.get() or 0)
+        except ValueError:
+            idle_execs = 0
+        self.config_data['idle_settings'] = {
+            'enabled': self.idle_enabled_var.get(),
+            'stop_after_minutes': idle_minutes,
+            'stop_at_time': f"{self.idle_stop_hour_var.get().strip()}:{self.idle_stop_min_var.get().strip()}",
+            'stop_after_rounds': idle_rounds,
+            'stop_after_executions': idle_execs
+        }
+        # 保存自适应配置
+        self.config_data['adaptive'] = {
+            'enabled': self.adaptive_enabled_var.get()
+        }
+
+        # 保存统计报告时间窗口
+        self.config_data['stats_report_time'] = {
+            'enabled': self.srt_enabled_var.get(),
+            'start_time': f"{self.srt_start_hour_var.get().strip()}:{self.srt_start_min_var.get().strip()}",
+            'end_time': f"{self.srt_end_hour_var.get().strip()}:{self.srt_end_min_var.get().strip()}"
         }
 
         self._save_config()
@@ -2507,13 +2977,17 @@ class GameMonitorGUI:
         return 0
 
     def _activate_game_window(self):
-        """激活游戏窗口并前显（使用AttachThreadInput确保SetForegroundWindow成功）"""
+        """激活游戏窗口并前显（与ActionExecutor._activate_window一致的可靠方法）"""
         import ctypes
         hwnd = self._get_game_hwnd()
         if not hwnd:
             return
         try:
-            # 获取当前线程ID和目标窗口线程ID
+            # 如果窗口已在前台，跳过
+            fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
+            if fg_hwnd == hwnd:
+                return
+
             curr_thread = ctypes.windll.kernel32.GetCurrentThreadId()
             target_thread = ctypes.windll.user32.GetWindowThreadProcessId(hwnd, None)
 
@@ -2521,17 +2995,11 @@ class GameMonitorGUI:
             ctypes.windll.user32.AttachThreadInput(target_thread, curr_thread, True)
 
             # 如果窗口最小化，先恢复
+            SW_RESTORE = 9
             if ctypes.windll.user32.IsIconic(hwnd):
-                ctypes.windll.user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+                ctypes.windll.user32.ShowWindow(hwnd, SW_RESTORE)
 
-            # 置顶并前显
-            HWND_TOPMOST = -1
-            SWP_NOSIZE = 0x0001
-            SWP_NOMOVE = 0x0002
-            SWP_SHOWWINDOW = 0x0040
-            ctypes.windll.user32.SetWindowPos(hwnd, HWND_TOPMOST, 0, 0, 0, 0,
-                                               SWP_NOSIZE | SWP_NOMOVE | SWP_SHOWWINDOW)
-            # 设为前台窗口
+            # 设置前台窗口
             ctypes.windll.user32.SetForegroundWindow(hwnd)
 
             # 分离线程输入
@@ -2899,7 +3367,7 @@ class GameMonitorGUI:
             self._topmost_timer_id = self.root.after(30000, self._topmost_tick)
             self._log("[启动] 游戏窗口定时激活已启用")
 
-        # 根据配置显示悬浮统计窗口
+        # 监控启动时根据开关决定是否显示悬浮统计窗口
         if self.show_floating_var.get():
             self.floating_window.show()
 
@@ -2907,10 +3375,17 @@ class GameMonitorGUI:
         self.monitor_thread.start()
 
     def _stop_monitor(self, emergency=False):
+        # 先立即停止监控循环（线程安全，可在任意线程调用）
+        if self.game_monitor:
+            self.game_monitor.stop()
+        # Tk操作放到主线程
+        self.root.after(0, lambda: self._stop_monitor_ui(emergency))
+
+    def _stop_monitor_ui(self, emergency=False):
+        """更新停止后的UI状态（必须在主线程调用）"""
         try:
             self.monitor_running = False
-            if self.game_monitor:
-                self.game_monitor.stop()
+            # game_monitor.stop() 已在外层调用
 
             # 取消游戏窗口置顶定时器
             if self._topmost_timer_id is not None:
@@ -2940,26 +3415,109 @@ class GameMonitorGUI:
             except:
                 pass
 
+    def _capture_hotkey(self, target):
+        """捕捉用户按下的快捷键（后台线程捕获，不阻塞GUI）"""
+        import keyboard
+        import threading
+        import time
+
+        btn_map = {
+            'start': (self.hotkey_start_label, self.hotkey_start_var, '开始/停止'),
+            'pause': (self.hotkey_pause_label, self.hotkey_pause_var, '暂停/恢复')
+        }
+        label, var, name = btn_map[target]
+        original_key = var.get()
+
+        # 显示等待状态
+        label.config(text='按任意键...', fg='#e74c3c')
+        self.root.update()
+
+        # 临时移除全局热键，避免按键冲突
+        keyboard.clear_all_hotkeys()
+
+        captured = {'key': None}
+
+        def on_key(event):
+            if captured['key'] is not None:
+                return
+            captured['key'] = event.name
+            return False
+
+        handler = keyboard.hook(on_key)
+
+        def _wait_and_finish():
+            deadline = time.time() + 5.0
+            while captured['key'] is None and time.time() < deadline:
+                time.sleep(0.05)
+            keyboard.unhook(handler)
+            # 无论超时还是捕获到，都在主线程中处理结果
+            self.root.after(0, lambda: self._finish_capture(target, captured['key'], original_key))
+
+        threading.Thread(target=_wait_and_finish, daemon=True).start()
+
+    def _finish_capture(self, target, captured_key, original_key):
+        """在捕捉到按键或超时后更新UI并重新注册热键"""
+        btn_map = {
+            'start': (self.hotkey_start_label, self.hotkey_start_var, '开始/停止'),
+            'pause': (self.hotkey_pause_label, self.hotkey_pause_var, '暂停/恢复')
+        }
+        label, var, name = btn_map[target]
+
+        if captured_key is None:
+            # 超时
+            var.set(original_key)
+            label.config(text=original_key, fg='#1565C0')
+            self._log(f"[热键] {name} 设置超时，已恢复")
+        elif captured_key == 'esc':
+            # ESC取消
+            var.set(original_key)
+            label.config(text=original_key, fg='#1565C0')
+            self._log(f"[热键] {name} 已取消")
+        else:
+            key = captured_key
+            if len(key) == 1 and key.isalpha():
+                key = key.lower()
+            var.set(key)
+            label.config(text=key, fg='#1565C0')
+            self._log(f"[热键] {name} 快捷键已设为: {key}")
+
+        # 重新注册全局热键
+        self._setup_hotkeys()
+
     def _setup_hotkeys(self):
         """注册全局热键"""
         try:
             import keyboard
             hotkeys = self.config_data.get('hotkeys', {})
-            keyboard.add_hotkey(hotkeys.get('start_stop', 'F8'), self._toggle_monitor)
-            keyboard.add_hotkey(hotkeys.get('pause_resume', 'F10'), self._toggle_pause)
-            self._log("[热键] 全局热键已注册: F8=开始/停止 F10=暂停/恢复")
+            start_key = hotkeys.get('start_stop', 'F8')
+            pause_key = hotkeys.get('pause_resume', 'F10')
+            keyboard.add_hotkey(start_key, self._toggle_monitor)
+            keyboard.add_hotkey(pause_key, self._toggle_pause)
+            self._log(f"[热键] 全局热键已注册: {start_key}=开始/停止 {pause_key}=暂停/恢复")
         except Exception as e:
             self._log(f"[热键] 注册失败: {e}")
 
     def _toggle_monitor(self):
-        """热键: 开始/停止监控"""
-        self.root.after(0, lambda: self._start_monitor() if not self.monitor_running else self._stop_monitor())
+        """热键: 开始/停止监控（直接调用，不通过root.after，避免主线程阻塞时无法响应）"""
+        try:
+            if not self.monitor_running:
+                self._start_monitor()
+            else:
+                self._stop_monitor()
+        except Exception as e:
+            logging.error(f"[热键] toggle_monitor异常: {e}")
 
     def _toggle_pause(self):
-        """热键: 暂停/恢复监控"""
+        """热键: 暂停/恢复监控（直接调用）"""
         if not self.monitor_running or not self.game_monitor:
             return
-        self.root.after(0, lambda: self._pause_monitor() if not self.game_monitor.paused else self._resume_monitor())
+        try:
+            if not self.game_monitor.paused:
+                self._pause_monitor()
+            else:
+                self._resume_monitor()
+        except Exception as e:
+            logging.error(f"[热键] toggle_pause异常: {e}")
 
     def _pause_monitor(self):
         """暂停监控"""
@@ -2982,6 +3540,7 @@ class GameMonitorGUI:
     def _monitor_worker(self):
         try:
             self.game_monitor = GameMonitor(self.config_path)
+            self.game_monitor.tk_root = self.root
             self._setup_gui_logging()
             self.game_monitor.start()
             # 监控正常结束后，检查是否因紧急停止退出

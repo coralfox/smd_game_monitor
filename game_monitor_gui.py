@@ -3,12 +3,19 @@
 支持窗口选择和相对坐标
 """
 
+import ctypes
+import ctypes.wintypes
 import json
+import keyboard
+import logging
 import os
 import re
 import sys
 import time
 import threading
+import traceback
+import urllib.request
+import webbrowser
 import numpy as np
 import qrcode
 import pyautogui
@@ -22,8 +29,6 @@ from io import BytesIO
 import tkinter as tk
 from tkinter import ttk, messagebox, scrolledtext
 from datetime import datetime
-from pathlib import Path
-
 # 导入RapidOCR（无需PaddlePaddle，轻量稳定）
 from rapidocr_onnxruntime import RapidOCR
 
@@ -44,9 +49,6 @@ from game_monitor import (
 
 def get_window_list():
     """获取所有可见窗口列表"""
-    import ctypes
-    import ctypes.wintypes
-
     windows = []
 
     # 使用纯ctypes方式枚举窗口，避免Python 3.14回调问题
@@ -88,9 +90,6 @@ def get_window_list():
 
 def capture_window_region(hwnd, left, top, width, height):
     """截取窗口内指定区域"""
-    import ctypes
-    import ctypes.wintypes
-
     rect = ctypes.wintypes.RECT()
     ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
     abs_left = rect.left + left
@@ -185,7 +184,6 @@ class WindowSelectorDialog:
 
     def _use_mouse_window(self):
         """使用鼠标当前位置下的窗口"""
-        import ctypes
         x, y = pyautogui.position()
         hwnd = ctypes.windll.user32.WindowFromPoint(ctypes.wintypes.POINT(x, y))
         if hwnd:
@@ -971,9 +969,8 @@ class FloatingStatsWindow:
 
     def add_log(self, message: str):
         """添加一条关键日志（精简显示：月日时分秒 + 内容，去掉级别）"""
-        import re
-        # 匹配 "2026-07-03 12:53:00,155 [ERROR] xxx" 格式
-        m = re.search(r'(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),\d+\s*\[[A-Z]+\]\s*(.*)', message)
+        # 匹配 "2026-07-03 12:53:00,155 [ERROR] xxx" 或 "2026-07-03 12:53:00 [报警] xxx" 格式
+        m = re.search(r'(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2}),?\d*\s*\[[^\]]+\]\s*(.*)', message)
         if m:
             # MMdd HHmmss + 内容
             short = f"{m.group(2)}{m.group(3)} {m.group(4)}{m.group(5)}{m.group(6)} {m.group(7)[:40]}"
@@ -991,8 +988,6 @@ class FloatingStatsWindow:
         if not game_window and self.gui.game_monitor and self.gui.game_monitor.screen_capture:
             sc = self.gui.game_monitor.screen_capture
             if sc.window_hwnd:
-                import ctypes
-                import ctypes.wintypes
                 rect = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(sc.window_hwnd, ctypes.byref(rect))
                 game_window = {
@@ -1004,8 +999,6 @@ class FloatingStatsWindow:
                 }
 
         if game_window:
-            import ctypes
-            import ctypes.wintypes
             hwnd = game_window.get('hwnd', 0)
             if hwnd:
                 rect = ctypes.wintypes.RECT()
@@ -1103,12 +1096,6 @@ class FloatingStatsWindow:
             max_rounds = idle_cfg.get('stop_after_rounds', 0)
             max_execs = idle_cfg.get('stop_after_executions', 0)
             stop_at = idle_cfg.get('stop_at_time', '')
-            if self.gui.game_monitor and self.gui.monitor_start_time:
-                elapsed = time.time() - self.gui.monitor_start_time
-                if max_mins > 0:
-                    remain = max(max_mins * 60 - elapsed, 0)
-                    m, s = divmod(int(remain), 60)
-                    countdown_parts.append(f"时间剩余:{m}分{s}秒")
             if max_rounds > 0:
                 total_rounds = len(self.gui.game_monitor._round_events) if self.gui.game_monitor else 0
                 countdown_parts.append(f"轮数:{total_rounds}/{max_rounds}")
@@ -1136,8 +1123,6 @@ class FloatingStatsWindow:
             self.log_text.config(state=tk.DISABLED)
 
         # 跟随游戏窗口位置（仅在位置变化时才更新）
-        import ctypes
-        import ctypes.wintypes
         game_hwnd = self._get_game_hwnd()
         if game_hwnd:
             rect = ctypes.wintypes.RECT()
@@ -1151,7 +1136,6 @@ class FloatingStatsWindow:
 
     def _get_game_hwnd(self):
         """获取游戏窗口hwnd"""
-        import ctypes
         hwnd = 0
         if self.gui.selected_window:
             hwnd = self.gui.selected_window.get('hwnd', 0)
@@ -1167,15 +1151,13 @@ class FloatingStatsWindow:
 class GameMonitorGUI:
     """游戏监控GUI主界面"""
 
-    VERSION = "1.1.0"
+    VERSION = "2.0.0"
     AUTHOR = "重楼一叶"
     PAN_LINK = "https://qj2smd.ysepan.com/"
     PAN_PASSWORD = "1234"
     GITHUB_LINK = "https://github.com/coralfox/smd_game_monitor"
     UPDATE_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/version.txt"
     GITEE_UPDATE_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/version.txt"
-    CHANGELOG_URL = "https://raw.githubusercontent.com/coralfox/smd_game_monitor/refs/heads/master/CHANGELOG.html"
-    GITEE_CHANGELOG_URL = "https://raw.giteeusercontent.com/coralfox/smd_game_monitor/raw/master/CHANGELOG.html"
     WECHAT_PAY_URL = "wxp://f2f0sSU1dBcu_SftrSutvSM9dVK1LasDZnOShA4l10NmCY4"       # 你的微信收款链接
     ALIPAY_PAY_URL = "https://qr.alipay.com/fkx10172eaxgrkqw2wlbtd3?t=1782895171528"  # 你的支付宝收款链接
 
@@ -1254,7 +1236,7 @@ class GameMonitorGUI:
                     path = os.path.join(self.configs_dir, name)
                     if os.path.exists(path):
                         return path
-        except:
+        except Exception:
             pass
         return None
 
@@ -1264,7 +1246,7 @@ class GameMonitorGUI:
             name = os.path.basename(self.config_path)
             with open(self.last_config_file, 'w', encoding='utf-8') as f:
                 f.write(name)
-        except:
+        except Exception:
             pass
 
     def _scan_config_files(self):
@@ -1435,7 +1417,7 @@ class GameMonitorGUI:
         # 标签页1: 监控设置
         self._build_monitor_tab()
 
-        # 标签页2: 频率检测
+        # 标签页2: 监控参数
         self._build_frequency_tab()
 
         # 标签页3: 重启原力
@@ -1444,11 +1426,8 @@ class GameMonitorGUI:
         # 标签页4: 策略管理
         self._build_strategies_tab()
 
-        # 标签页4: 日志
+        # 标签页5: 日志
         self._build_log_tab()
-
-        # 标签页5: 更新记录
-        self._build_changelog_tab()
 
         # 标签页6: 关于
         self._build_about_tab()
@@ -1723,8 +1702,6 @@ class GameMonitorGUI:
         # 分隔线
         tk.Frame(core_frame, height=1, bg='#ccc').pack(fill=tk.X, padx=5, pady=(4, 2))
 
-        # (图床Key已移动到统计报告推送行)
-
         # 行6: 定期统计报告推送 + 图床Key
         sr_row = tk.Frame(core_frame)
         sr_row.pack(fill=tk.X, pady=1)
@@ -1806,54 +1783,69 @@ class GameMonitorGUI:
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
         tk.Label(idle_row, text="(0=无限,到达后取消启用)", font=('微软雅黑', 8), fg='#888').pack(side=tk.LEFT, padx=5)
 
-        # (统计报告时间窗口已合并到报警核心参数中)
-
     def _build_restart_tab(self):
         """构建重启原力配置标签页"""
         tab = tk.Frame(self.notebook)
         self.notebook.add(tab, text=" 重启原力 ")
 
-        # 基本设置
+        # ==================== 基本设置 ====================
         basic_frame = tk.LabelFrame(tab, text="基本设置", font=('微软雅黑', 10))
         basic_frame.pack(fill=tk.X, padx=10, pady=5)
 
+        # 启用自动重启（第一行，突出显示）
         en_row = tk.Frame(basic_frame)
-        en_row.pack(fill=tk.X, pady=3)
+        en_row.pack(fill=tk.X, pady=(8, 6))
         self.restart_enabled_var = tk.BooleanVar(value=False)
         tk.Checkbutton(en_row, text="启用自动重启", variable=self.restart_enabled_var,
-                       font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=5)
+                       font=('微软雅黑', 10, 'bold')).pack(side=tk.LEFT, padx=10)
 
-        # bat文件路径
-        bat_row = tk.Frame(basic_frame)
-        bat_row.pack(fill=tk.X, pady=3)
-        tk.Label(bat_row, text="启动Bat:", font=('微软雅黑', 9), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
+        # ========== 第二行：Bat路径 + 原力标题（同一行）==========
+        row2 = tk.Frame(basic_frame)
+        row2.pack(fill=tk.X, pady=3)
+
+        # 左侧：Bat路径
+        bat_frame = tk.Frame(row2)
+        bat_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 5))
+        tk.Label(bat_frame, text="启动Bat:", font=('微软雅黑', 9), width=10,
+                 anchor='e').pack(side=tk.LEFT, padx=5)
         self.restart_bat_var = tk.StringVar(value='')
-        tk.Entry(bat_row, textvariable=self.restart_bat_var, width=40,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Button(bat_row, text="浏览", width=5, font=('微软雅黑', 9),
+        tk.Entry(bat_frame, textvariable=self.restart_bat_var, width=35,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=False)
+        tk.Button(bat_frame, text="浏览", width=5, font=('微软雅黑', 9),
                   command=self._browse_bat).pack(side=tk.LEFT, padx=5)
 
-        # 游戏快捷方式
-        gs_row = tk.Frame(basic_frame)
-        gs_row.pack(fill=tk.X, pady=3)
-        tk.Label(gs_row, text="游戏快捷方式:", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        # 右侧：原力标题
+        rd_frame = tk.Frame(row2)
+        rd_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
+        tk.Label(rd_frame, text="原力标题:", font=('微软雅黑', 9), width=10,
+                 anchor='e').pack(side=tk.LEFT, padx=5)
+        self.restart_rundll32_title_var = tk.StringVar(value='音乐盒子')
+        tk.Entry(rd_frame, textvariable=self.restart_rundll32_title_var, width=30,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=False)
+
+        # ========== 第三行：游戏快捷方式 + 游戏标题（同一行）==========
+        row3 = tk.Frame(basic_frame)
+        row3.pack(fill=tk.X, pady=(3, 8))
+
+        # 左侧：游戏快捷方式
+        gs_frame = tk.Frame(row3)
+        gs_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(10, 5))
+        tk.Label(gs_frame, text="游戏快捷方式:", font=('微软雅黑', 9), width=10,
+                 anchor='e').pack(side=tk.LEFT, padx=5)
         self.restart_game_shortcut_var = tk.StringVar(value='')
-        tk.Entry(gs_row, textvariable=self.restart_game_shortcut_var, width=35,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Button(gs_row, text="浏览", width=5, font=('微软雅黑', 9),
+        tk.Entry(gs_frame, textvariable=self.restart_game_shortcut_var, width=35,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=False)
+        tk.Button(gs_frame, text="浏览", width=5, font=('微软雅黑', 9),
                   command=self._browse_game_shortcut).pack(side=tk.LEFT, padx=5)
 
-        # rundll32窗口信息
-        rd_row = tk.Frame(basic_frame)
-        rd_row.pack(fill=tk.X, pady=3)
-        tk.Label(rd_row, text="原力标题:", font=('微软雅黑', 9), width=10, anchor='e').pack(side=tk.LEFT, padx=5)
-        self.restart_rundll32_title_var = tk.StringVar(value='音乐盒子')
-        tk.Entry(rd_row, textvariable=self.restart_rundll32_title_var, width=20,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
-        tk.Label(rd_row, text="游戏标题:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(10, 2))
+        # 右侧：游戏标题
+        game_frame = tk.Frame(row3)
+        game_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(5, 10))
+        tk.Label(game_frame, text="游戏标题:", font=('微软雅黑', 9), width=10,
+                 anchor='e').pack(side=tk.LEFT, padx=5)
         self.restart_game_title_var = tk.StringVar(value="Tom Clancy's The Division 2")
-        tk.Entry(rd_row, textvariable=self.restart_game_title_var, width=30,
-                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
+        tk.Entry(game_frame, textvariable=self.restart_game_title_var, width=30,
+                 font=('Consolas', 10)).pack(side=tk.LEFT, padx=2, fill=tk.X, expand=False)
 
         # 触发条件
         trigger_frame = tk.LabelFrame(tab, text="触发重启条件(策略触发)", font=('微软雅黑', 10))
@@ -1861,7 +1853,7 @@ class GameMonitorGUI:
 
         tg_row = tk.Frame(trigger_frame)
         tg_row.pack(fill=tk.X, pady=3)
-        tk.Label(tg_row, text="连续触发次数(不变回0):", font=('微软雅黑', 9), width=12, anchor='e').pack(side=tk.LEFT, padx=5)
+        tk.Label(tg_row, text="连续触发次数(不变回0):", font=('微软雅黑', 9), width=20, anchor='e').pack(side=tk.LEFT, padx=5)
         self.restart_burst_var = tk.StringVar(value='5')
         tk.Entry(tg_row, textvariable=self.restart_burst_var, width=6,
                  font=('Consolas', 10)).pack(side=tk.LEFT, padx=2)
@@ -1903,12 +1895,201 @@ class GameMonitorGUI:
         cfg_frame = tk.LabelFrame(tab, text="SMD 配置管理", font=('微软雅黑', 10))
         cfg_frame.pack(fill=tk.X, padx=10, pady=5)
 
+        # --- 第一行：操作按钮 ---
         op_row = tk.Frame(cfg_frame)
-        op_row.pack(fill=tk.X, pady=5)
-        tk.Button(op_row, text="打开 SMD 配置编辑器", font=('微软雅黑', 10),
-                  bg='#2196F3', fg='white', command=self._open_smd_editor).pack(side=tk.LEFT, padx=10)
-        tk.Button(op_row, text="测试重启流程", font=('微软雅黑', 10),
-                  bg='#FF9800', fg='white', command=self._test_restart).pack(side=tk.LEFT, padx=10)
+        op_row.pack(fill=tk.X, pady=(8, 10))
+        btn_open = tk.Button(op_row, text="打开 SMD 配置编辑器", font=('微软雅黑', 10),
+                             bg='#2196F3', fg='white', relief=tk.FLAT,
+                             activebackground='#1976D2', activeforeground='white',
+                             cursor="hand2", command=self._open_smd_editor)
+        btn_open.pack(side=tk.LEFT, padx=(10, 5), ipady=3)
+
+        btn_test = tk.Button(op_row, text="一键重启", font=('微软雅黑', 10),
+                             bg='#FF9800', fg='white', relief=tk.FLAT,
+                             activebackground='#F57C00', activeforeground='white',
+                             cursor="hand2", command=self._one_click_restart)
+        btn_test.pack(side=tk.LEFT, padx=5, ipady=3)
+
+        btn_stop = tk.Button(op_row, text="停止重启", font=('微软雅黑', 10),
+                             bg='#f44336', fg='white', relief=tk.FLAT,
+                             activebackground='#d32f2f', activeforeground='white',
+                             cursor="hand2", command=self._stop_restart)
+        btn_stop.pack(side=tk.LEFT, padx=5, ipady=3)
+
+        btn_quick = tk.Button(op_row, text="一键配置", font=('微软雅黑', 10),
+                              bg='#4CAF50', fg='white', relief=tk.FLAT,
+                              activebackground='#388E3C', activeforeground='white',
+                              cursor="hand2", command=self._one_click_config)
+        btn_quick.pack(side=tk.LEFT, padx=5, ipady=3)
+
+        # --- 第二行：配置文件 + 脚本类型 + 脚本名（同一行）---
+        select_row = tk.Frame(cfg_frame)
+        select_row.pack(fill=tk.X, pady=(0, 10))
+
+        # 1. 配置文件
+        file_frame = tk.Frame(select_row)
+        file_frame.pack(side=tk.LEFT, padx=(10, 15))
+        tk.Label(file_frame, text="配置文件:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        self.smd_config_file_var = tk.StringVar()
+        self.smd_config_file_combo = ttk.Combobox(file_frame, textvariable=self.smd_config_file_var,
+                                                  values=[], state="readonly", width=22,
+                                                  font=('微软雅黑', 9))
+        self.smd_config_file_combo.pack(side=tk.LEFT)
+        self.smd_config_file_combo.bind("<<ComboboxSelected>>", self._on_smd_config_file_changed)
+
+        # 2. 脚本类型
+        type_frame = tk.Frame(select_row)
+        type_frame.pack(side=tk.LEFT, padx=(0, 15))
+        tk.Label(type_frame, text="脚本类型:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        self.smd_script_type_var = tk.StringVar(value="恶化")
+        smd_type_combo = ttk.Combobox(type_frame, textvariable=self.smd_script_type_var,
+                                      values=["恶化", "入侵", "副本", "支线", "报复", "自定义"],
+                                      state="readonly", width=10, font=('微软雅黑', 9))
+        smd_type_combo.pack(side=tk.LEFT)
+        smd_type_combo.bind("<<ComboboxSelected>>", self._on_smd_script_type_changed)
+
+        # 3. 脚本名（占据剩余空间）
+        name_frame = tk.Frame(select_row)
+        name_frame.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 10))
+        tk.Label(name_frame, text="脚本名:", font=('微软雅黑', 9)).pack(side=tk.LEFT, padx=(0, 5))
+        self.smd_script_name_var = tk.StringVar(value="")
+        self.smd_script_name_combo = ttk.Combobox(name_frame, textvariable=self.smd_script_name_var,
+                                                  values=[], width=30, font=('Consolas', 9))
+        self.smd_script_name_combo.pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.smd_script_name_combo.bind("<<ComboboxSelected>>", self._on_smd_script_name_changed)
+
+        # 初始化配置文件列表
+        self._refresh_smd_config_files()
+
+        # 初始化时从SMD配置加载脚本类型和脚本名
+        self._load_smd_script_selector()
+
+    def _get_current_smd_config_path(self):
+        """获取当前选中的SMD配置文件路径，默认 smd_settings.json"""
+        sel = self.smd_config_file_var.get()
+        if sel:
+            return os.path.join(self.app_dir, 'smd_config', sel)
+        return os.path.join(self.app_dir, 'smd_config', 'smd_settings.json')
+
+    def _refresh_smd_config_files(self):
+        """刷新SMD配置文件下拉列表（隐藏默认的 smd_settings.json）"""
+        smd_dir = os.path.join(self.app_dir, 'smd_config')
+        files = []
+        if os.path.isdir(smd_dir):
+            try:
+                files = sorted([f for f in os.listdir(smd_dir) if f.endswith('.json') and f != 'smd_settings.json'])
+            except Exception:
+                pass
+        self.smd_config_file_combo['values'] = files
+        # 默认选中第一个，或显示空
+        if files:
+            self.smd_config_file_var.set(files[0])
+        else:
+            self.smd_config_file_var.set('')
+
+    def _on_smd_config_file_changed(self, event=None):
+        """配置文件切换 -> 更新 GameRestarter 路径并重新加载脚本选择器"""
+        config_path = self._get_current_smd_config_path()
+        if self.game_monitor and hasattr(self.game_monitor, 'restarter') and self.game_monitor.restarter:
+            self.game_monitor.restarter.smd_config_path = config_path
+        # 重新加载脚本选择器
+        self._load_smd_script_selector()
+
+    def _load_smd_script_selector(self):
+        """从当前选中的SMD配置文件加载脚本类型和脚本名到快速选择器"""
+        try:
+            smd_config_path = self._get_current_smd_config_path()
+            if not os.path.isfile(smd_config_path):
+                return
+            with open(smd_config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            script_edit_data = data.get("script_edit", {})
+            extra = script_edit_data.get("extra", {})
+            script_type = extra.get("script_type", "恶化")
+            self.smd_script_type_var.set(script_type)
+            # 刷新脚本名列表
+            self._refresh_smd_script_names()
+            # 始终从配置文件读取脚本名
+            selections = extra.get("script_selections", {})
+            config_script = selections.get(script_type, extra.get("selected_script", ""))
+            if config_script:
+                self.smd_script_name_var.set(config_script)
+        except Exception:
+            pass
+
+    def _refresh_smd_script_names(self):
+        """根据脚本类型刷新脚本名下拉列表"""
+        if not hasattr(self, 'smd_script_name_combo'):
+            return
+        script_type = self.smd_script_type_var.get()
+        prefix_map = {
+            "恶化": "eh_",
+            "入侵": "rq_",
+            "副本": "fb_",
+            "支线": "zx_",
+            "报复": "bf_",
+            "自定义": "",
+        }
+        prefix = prefix_map.get(script_type, "")
+        scan_dir = r"C:\Spc"
+        names = []
+        if os.path.isdir(scan_dir):
+            try:
+                files = sorted([f for f in os.listdir(scan_dir) if f.endswith('.bin')])
+                if prefix:
+                    names = [f for f in files if f.lower().startswith(prefix.lower())]
+                else:
+                    names = files
+            except Exception:
+                pass
+        self.smd_script_name_combo['values'] = names
+
+    def _on_smd_script_type_changed(self, event=None):
+        """主界面脚本类型切换 -> 刷新脚本名列表，从配置文件读取已选脚本名"""
+        self._refresh_smd_script_names()
+        # 始终从配置文件读取
+        try:
+            script_type = self.smd_script_type_var.get()
+            smd_config_path = self._get_current_smd_config_path()
+            if not os.path.isfile(smd_config_path):
+                return
+            with open(smd_config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            extra = data.get("script_edit", {}).get("extra", {})
+            selections = extra.get("script_selections", {})
+            config_script = selections.get(script_type, extra.get("selected_script", ""))
+            if config_script:
+                self.smd_script_name_var.set(config_script)
+        except Exception:
+            pass
+
+    def _on_smd_script_name_changed(self, event=None):
+        """主界面脚本名选择（仅临时更改，不写配置文件）"""
+        pass
+
+    def _sync_smd_script_to_editor(self):
+        """将主界面的脚本类型和脚本名同步保存到当前选定的SMD配置文件"""
+        try:
+            smd_config_path = self._get_current_smd_config_path()
+            if not os.path.isfile(smd_config_path):
+                return
+            with open(smd_config_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            if "script_edit" not in data:
+                data["script_edit"] = {"items": [], "extra": {}}
+            if "extra" not in data["script_edit"]:
+                data["script_edit"]["extra"] = {}
+            script_type = self.smd_script_type_var.get()
+            data["script_edit"]["extra"]["script_type"] = script_type
+            data["script_edit"]["extra"]["selected_script"] = self.smd_script_name_var.get()
+            # 同步到 script_selections
+            if "script_selections" not in data["script_edit"]["extra"]:
+                data["script_edit"]["extra"]["script_selections"] = {}
+            data["script_edit"]["extra"]["script_selections"][script_type] = self.smd_script_name_var.get()
+            with open(smd_config_path, 'w', encoding='utf-8') as f:
+                json.dump(data, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
 
     def _browse_bat(self):
         """选择bat文件"""
@@ -1926,31 +2107,112 @@ class GameMonitorGUI:
             self.restart_game_shortcut_var.set(path)
 
     def _open_smd_editor(self):
-        """打开SMD配置编辑器"""
+        """打开SMD配置编辑器，传入当前选中的配置文件"""
         try:
             from smd_config_editor import SMDConfigEditor
-            SMDConfigEditor(self.root, game_monitor_ref=self.game_monitor)
+            config_path = self._get_current_smd_config_path()
+            SMDConfigEditor(self.root,
+                           game_monitor_ref=self.game_monitor,
+                           config_path=config_path)
         except Exception as e:
             messagebox.showerror("错误", f"打开编辑器失败: {e}")
 
-    def _test_restart(self):
-        """测试重启流程（仅日志输出，不实际执行）"""
-        self._log("[重启] 测试模式 - 检查配置:")
-        bat = self.restart_bat_var.get().strip()
-        self._log(f"  Bat文件: {'✓' if bat and os.path.isfile(bat) else '✗ ' + ('未设置' if not bat else '文件不存在')}")
-        gs = self.restart_game_shortcut_var.get().strip()
-        if gs:
-            if '://' in gs:
-                self._log(f"  游戏快捷方式: ✓ {gs} (URL协议)")
-            elif os.path.isfile(gs):
-                self._log(f"  游戏快捷方式: ✓ {gs}")
-            else:
-                self._log(f"  游戏快捷方式: ✗ 无效 ({gs})")
-        else:
-            self._log("  游戏快捷方式: 未设置")
-        self._log(f"  原力标题: {self.restart_rundll32_title_var.get() or '未设置'}")
-        gt = self.restart_game_title_var.get() if hasattr(self, 'restart_game_title_var') else ''
-        self._log(f"  游戏标题: {gt or '未设置'}")
+    def _one_click_restart(self):
+        """一键重启：直接执行重启流程，自动检测当前阶段并从该阶段继续"""
+        # 从配置文件加载重启相关参数
+        config_data = self.config_data
+        rs = config_data.get('restart_settings', {})
+
+        from game_monitor import GameRestarter
+        # 构建 GameRestarter 所需的 config 对象（支持属性访问如 config.window.get）
+        class _SimpleConfig:
+            def __init__(self, data):
+                self.data = data
+            def get(self, *args, **kwargs):
+                return self.data.get(*args, **kwargs)
+            def __getattr__(self, name):
+                # 属性访问转换为字典访问，如 config.window -> data.get('window', {})
+                val = self.data.get(name, {})
+                # 如果值是字典，包装为可继续属性访问的对象
+                if isinstance(val, dict):
+                    return _SimpleConfig(val)
+                return val
+
+        restart_cfg = _SimpleConfig(config_data)
+        # 复用已有的 game_monitor（如果已初始化），否则创建最小化对象
+        if not self.game_monitor:
+            from game_monitor import GameMonitor
+            self.game_monitor = GameMonitor(self.config_path)
+            self.game_monitor.tk_root = self.root
+        gm = self.game_monitor
+
+        if not hasattr(gm, 'restarter') or gm.restarter is None:
+            gm.restarter = GameRestarter(restart_cfg, gm, tk_root=self.root)
+
+        restarter = gm.restarter
+        if restarter._is_restarting:
+            self._log("[重启] 重启流程已在进行中，请等待完成")
+            return
+        self._log("[重启] ========== 一键重启 ==========")
+        # 同步最新GUI配置到 restarter
+        restarter.game_shortcut = self.restart_game_shortcut_var.get().strip()
+        restarter.bat_file = self.restart_bat_var.get().strip()
+        restarter.rundll32_title = self.restart_rundll32_title_var.get().strip()
+        restarter.game_title = self.restart_game_title_var.get().strip() if hasattr(self, 'restart_game_title_var') else ''
+        restarter.smd_config_path = self._get_current_smd_config_path()
+        # 同步 GUI 当前选定的脚本到 restarter（特殊操作优先使用）
+        restarter._gui_selected_script = self.smd_script_name_var.get().strip()
+        restarter._gui_script_type = self.smd_script_type_var.get().strip()
+        # 启动重启流程（强制从阶段0开始）
+        restarter.start_restart(reason='一键重启')
+        self._log("[重启] 重启流程已启动，从阶段0开始")
+
+    def _stop_restart(self):
+        """停止当前重启/配置流程"""
+        if not self.game_monitor or not hasattr(self.game_monitor, 'restarter') or not self.game_monitor.restarter:
+            self._log("[重启] 当前没有正在进行的重启流程")
+            return
+        restarter = self.game_monitor.restarter
+        if not restarter._is_restarting:
+            self._log("[重启] 当前没有正在进行的重启流程")
+            return
+        restarter.stop_restart()
+        self._log("[重启] 已发送停止请求")
+
+    def _one_click_config(self):
+        """一键配置：只执行进游戏→按M→F11配置"""
+        config_data = self.config_data
+        from game_monitor import GameRestarter
+        class _SimpleConfig:
+            def __init__(self, data):
+                self.data = data
+            def get(self, *args, **kwargs):
+                return self.data.get(*args, **kwargs)
+            def __getattr__(self, name):
+                val = self.data.get(name, {})
+                if isinstance(val, dict):
+                    return _SimpleConfig(val)
+                return val
+        restart_cfg = _SimpleConfig(config_data)
+        if not self.game_monitor:
+            from game_monitor import GameMonitor
+            self.game_monitor = GameMonitor(self.config_path)
+            self.game_monitor.tk_root = self.root
+        gm = self.game_monitor
+        if not hasattr(gm, 'restarter') or gm.restarter is None:
+            gm.restarter = GameRestarter(restart_cfg, gm, tk_root=self.root)
+        restarter = gm.restarter
+        if restarter._is_restarting:
+            self._log("[重启] 流程已在进行中，请等待完成")
+            return
+        self._log("[重启] ========== 一键配置 ==========")
+        restarter.game_shortcut = self.restart_game_shortcut_var.get().strip()
+        restarter.bat_file = self.restart_bat_var.get().strip()
+        restarter.rundll32_title = self.restart_rundll32_title_var.get().strip()
+        restarter.game_title = self.restart_game_title_var.get().strip() if hasattr(self, 'restart_game_title_var') else ''
+        restarter.smd_config_path = self._get_current_smd_config_path()
+        restarter.start_quick_config()
+        self._log("[重启] 一键配置已启动")
 
     def _build_strategies_tab(self):
         tab = tk.Frame(self.notebook)
@@ -2055,108 +2317,6 @@ class GameMonitorGUI:
         tk.Checkbutton(btn_frame, text="自动滚动", variable=self.autoscroll_var).pack(side=tk.LEFT, padx=5)
         tk.Button(btn_frame, text="全部显示", command=self._show_all_levels,
                   width=12).pack(side=tk.LEFT, padx=5)
-
-    def _build_changelog_tab(self):
-        tab = tk.Frame(self.notebook)
-        self.notebook.add(tab, text=" 更新记录 ")
-
-        # 顶部源选择 + 刷新
-        ctrl_frame = tk.Frame(tab)
-        ctrl_frame.pack(fill=tk.X, padx=10, pady=5)
-
-        self.changelog_source_var = tk.StringVar(value='auto')
-        tk.Label(ctrl_frame, text="源:", font=('微软雅黑', 10)).pack(side=tk.LEFT, padx=(0, 5))
-        tk.Radiobutton(ctrl_frame, text="自动(竞速)", variable=self.changelog_source_var,
-                       value='auto', font=('微软雅黑', 9)).pack(side=tk.LEFT)
-        tk.Radiobutton(ctrl_frame, text="GitHub", variable=self.changelog_source_var,
-                       value='github', font=('微软雅黑', 9)).pack(side=tk.LEFT)
-        tk.Radiobutton(ctrl_frame, text="Gitee", variable=self.changelog_source_var,
-                       value='gitee', font=('微软雅黑', 9)).pack(side=tk.LEFT)
-
-        self.changelog_status_var = tk.StringVar(value="点击刷新获取更新记录...")
-        tk.Label(ctrl_frame, textvariable=self.changelog_status_var,
-                 font=('微软雅黑', 9), fg='#666').pack(side=tk.LEFT, padx=(20, 5))
-
-        tk.Button(ctrl_frame, text="刷新", command=self._load_changelog,
-                  width=8, bg='#4CAF50', fg='white', font=('微软雅黑', 9)).pack(side=tk.RIGHT, padx=5)
-
-        # HtmlFrame 显示区域（100% 还原 HTML/CSS）
-        try:
-            from tkinterweb import HtmlFrame
-            self.changelog_html = HtmlFrame(tab, messages_enabled=False)
-            self.changelog_html.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        except Exception as e:
-            self._log(f"[更新记录] HtmlFrame 加载失败: {e}")
-            self.changelog_status_var.set("渲染引擎加载失败")
-            return
-
-        # 首次自动加载
-        self.root.after(1500, self._load_changelog)
-
-    def _load_changelog(self):
-        """双源竞速获取 CHANGELOG.html"""
-        import threading
-        import urllib.request
-
-        self.changelog_status_var.set("正在获取更新记录...")
-        source = self.changelog_source_var.get()
-
-        result_event = threading.Event()
-        result_holder = {'content': None, 'source': None}
-
-        def _fetch(url, name):
-            if result_event.is_set():
-                return
-            try:
-                req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-                with urllib.request.urlopen(req, timeout=10) as resp:
-                    content = resp.read().decode('utf-8')
-                if content and not result_event.is_set():
-                    result_holder['content'] = content
-                    result_holder['source'] = name
-                    result_event.set()
-            except Exception:
-                pass
-
-        def _on_result():
-            result_event.wait(timeout=15)
-            content = result_holder.get('content')
-            src = result_holder.get('source', 'unknown')
-            self.root.after(0, lambda: self._display_changelog(content, src))
-
-        if source in ('auto', 'github'):
-            threading.Thread(target=_fetch, args=(self.CHANGELOG_URL, "GitHub"), daemon=True).start()
-        if source in ('auto', 'gitee'):
-            threading.Thread(target=_fetch, args=(self.GITEE_CHANGELOG_URL, "Gitee"), daemon=True).start()
-        threading.Thread(target=_on_result, daemon=True).start()
-
-    def _display_changelog(self, content: str, source: str):
-        if not hasattr(self, 'changelog_html'):
-            return
-        if content:
-            self.changelog_html.load_html(content)
-            self.changelog_status_var.set(f"已加载 (来自 {source})")
-        else:
-            # 加载失败时显示本地备份
-            local_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'CHANGELOG.html')
-            if os.path.isfile(local_path):
-                try:
-                    self.changelog_html.load_file(local_path)
-                    self.changelog_status_var.set("已加载本地备份 (网络不可用)")
-                except Exception:
-                    self.changelog_html.load_html(f'<html><body style="font-family:Microsoft YaHei;padding:20px;">'
-                                                  f'<p>无法加载更新记录。</p>'
-                                                  f'<p>请检查网络连接，或访问:</p>'
-                                                  f'<a href="{self.GITHUB_LINK}">{self.GITHUB_LINK}</a>'
-                                                  f'</body></html>')
-                    self.changelog_status_var.set("加载失败")
-            else:
-                self.changelog_html.load_html(f'<html><body style="font-family:Microsoft YaHei;padding:20px;">'
-                                              f'<p>无法加载更新记录。</p>'
-                                              f'<p>请检查网络连接，或访问:</p>'
-                                              f'<a href="{self.GITHUB_LINK}">{self.GITHUB_LINK}</a>'
-                                              f'</body></html>')
-                self.changelog_status_var.set("加载失败")
 
     def _build_about_tab(self):
 
@@ -2442,8 +2602,6 @@ class GameMonitorGUI:
             self.window_title_var.set(saved_title)
             # 尝试根据保存的hwnd或标题重新查找窗口
             if saved_hwnd:
-                import ctypes
-                import ctypes.wintypes
                 # 验证hwnd是否仍然有效
                 if ctypes.windll.user32.IsWindow(saved_hwnd):
                     rect = ctypes.wintypes.RECT()
@@ -2695,8 +2853,6 @@ class GameMonitorGUI:
         if not token:
             messagebox.showwarning("提示", "请先填写 PushPlus Token")
             return
-        import json
-        import urllib.request
         try:
             url = 'http://www.pushplus.plus/send'
             data = json.dumps({
@@ -2961,12 +3117,10 @@ class GameMonitorGUI:
 
     def _open_link(self, url: str):
         """用默认浏览器打开链接"""
-        import webbrowser
         webbrowser.open(url)
 
     def _get_game_hwnd(self):
         """获取游戏窗口的有效hwnd，返回0表示无效"""
-        import ctypes
         hwnd = 0
         if self.selected_window:
             hwnd = self.selected_window.get('hwnd', 0)
@@ -2978,7 +3132,6 @@ class GameMonitorGUI:
 
     def _activate_game_window(self):
         """激活游戏窗口并前显（与ActionExecutor._activate_window一致的可靠方法）"""
-        import ctypes
         hwnd = self._get_game_hwnd()
         if not hwnd:
             return
@@ -3040,8 +3193,6 @@ class GameMonitorGUI:
     def _check_update(self):
         """双源异步竞速检测更新，GitHub/Gitee 谁快用谁"""
         self.update_status_var.set("正在检测更新...")
-        import threading
-        import urllib.request
 
         result_event = threading.Event()
         result_holder = {'latest': None, 'source': None, 'done': False}
@@ -3099,9 +3250,6 @@ class GameMonitorGUI:
 
     def _use_mouse_window(self):
         """使用鼠标当前位置下的窗口"""
-        import ctypes
-        import ctypes.wintypes
-
         x, y = pyautogui.position()
         hwnd = ctypes.windll.user32.WindowFromPoint(ctypes.wintypes.POINT(x, y))
         if hwnd:
@@ -3138,9 +3286,6 @@ class GameMonitorGUI:
         if not title:
             messagebox.showwarning("提示", "请先输入窗口标题")
             return
-
-        import ctypes
-        import ctypes.wintypes
 
         # 遍历所有窗口查找匹配的标题
         found = None
@@ -3404,7 +3549,6 @@ class GameMonitorGUI:
             else:
                 self.status_var.set("监控已停止")
         except Exception as e:
-            import traceback
             err = f"[停止] _stop_monitor 异常: {e}\n{traceback.format_exc()}"
             logging.error(err)
             # 强制恢复按钮状态
@@ -3412,15 +3556,11 @@ class GameMonitorGUI:
                 self.start_btn.config(state=tk.NORMAL)
                 self.stop_btn.config(state=tk.DISABLED)
                 self.floating_window.hide()
-            except:
+            except Exception:
                 pass
 
     def _capture_hotkey(self, target):
         """捕捉用户按下的快捷键（后台线程捕获，不阻塞GUI）"""
-        import keyboard
-        import threading
-        import time
-
         btn_map = {
             'start': (self.hotkey_start_label, self.hotkey_start_var, '开始/停止'),
             'pause': (self.hotkey_pause_label, self.hotkey_pause_var, '暂停/恢复')
@@ -3487,7 +3627,6 @@ class GameMonitorGUI:
     def _setup_hotkeys(self):
         """注册全局热键"""
         try:
-            import keyboard
             hotkeys = self.config_data.get('hotkeys', {})
             start_key = hotkeys.get('start_stop', 'F8')
             pause_key = hotkeys.get('pause_resume', 'F10')
@@ -3543,25 +3682,26 @@ class GameMonitorGUI:
             self.game_monitor.tk_root = self.root
             self._setup_gui_logging()
             self.game_monitor.start()
+            # 同步GUI选定的SMD配置文件路径到restarter
+            smd_path = self._get_current_smd_config_path()
+            if self.game_monitor.restarter:
+                self.game_monitor.restarter.smd_config_path = smd_path
             # 监控正常结束后，检查是否因紧急停止退出
             if self.game_monitor and self.game_monitor.strategy_engine.emergency_stop_triggered:
                 self.root.after(0, lambda: self._stop_monitor(emergency=True))
                 return
         except Exception as e:
-            import traceback
             error_msg = f"监控异常: {e}\n{traceback.format_exc()}"
             try:
                 log_path = os.path.join(os.path.dirname(self.config_path), 'monitor_error.txt')
                 with open(log_path, 'a', encoding='utf-8') as f:
                     f.write(f"{datetime.now().strftime('%Y-%m-%d %H:%M:%S')} {error_msg}\n{'='*40}\n")
-            except:
+            except Exception:
                 pass
             self._log(error_msg)
         self.root.after(0, self._stop_monitor)
 
     def _setup_gui_logging(self):
-        import logging
-
         # 避免重复添加GUI handler
         root = logging.getLogger()
         for h in root.handlers:
@@ -3600,14 +3740,30 @@ class GameMonitorGUI:
                     tag = level_name
                     break
 
+            # 中文标签映射到日志级别
+            if not tag:
+                cn_warning_tags = ('[报警]', '[告警]', '[警告]', '[重启]')
+                cn_error_tags = ('[错误]', '[异常]', '[失败]')
+                for cn in cn_warning_tags:
+                    if cn in message:
+                        tag = 'WARNING'
+                        break
+                if not tag:
+                    for cn in cn_error_tags:
+                        if cn in message:
+                            tag = 'ERROR'
+                            break
+
+            # 判断是否需要同步到悬浮窗口
+            float_sync = tag in ('WARNING', 'ERROR')
+
             # 存储日志条目（用于后续过滤重建）
             self._log_entries.append((display_msg, tag))
 
             # 如果该级别被过滤，跳过不显示
             if tag and not self._log_level_enabled.get(tag, True):
                 self.log_text.config(state=tk.DISABLED)
-                # 关键日志同步到悬浮窗口 (WARNING/ERROR)
-                if tag in ('WARNING', 'ERROR'):
+                if float_sync:
                     self.floating_window.add_log(message)
                 return
 
@@ -3616,8 +3772,7 @@ class GameMonitorGUI:
                 self.log_text.see(tk.END)
             self.log_text.config(state=tk.DISABLED)
 
-            # 关键日志同步到悬浮窗口 (WARNING/ERROR)
-            if tag in ('WARNING', 'ERROR'):
+            if float_sync:
                 self.floating_window.add_log(message)
         self.root.after(0, update)
 
@@ -3631,7 +3786,6 @@ class GameMonitorGUI:
 
 def main():
     # 全局异常日志文件（用于pythonw.exe无控制台时的调试）
-    import sys, traceback
     def log_exception(exc_type, exc_value, exc_traceback):
         error_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'crash_log.txt')
         with open(error_file, 'a', encoding='utf-8') as f:

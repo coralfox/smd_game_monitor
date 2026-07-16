@@ -1,4 +1,4 @@
-import os
+﻿import os
 import sys
 import time
 import json
@@ -225,8 +225,6 @@ class ScreenCapture:
         self.CAPTUREBLT = 0x40000000
 
     def find_window(self):
-        import ctypes.wintypes
-
         title = self.config.window.get('title', '')
         class_name = self.config.window.get('class_name', '')
 
@@ -276,7 +274,6 @@ class ScreenCapture:
         """激活游戏窗口，确保截图时游戏在前台"""
         if not self.window_hwnd:
             return
-        import ctypes
         try:
             fg_hwnd = ctypes.windll.user32.GetForegroundWindow()
             if fg_hwnd == self.window_hwnd:
@@ -312,11 +309,9 @@ class ScreenCapture:
     def capture_full_window(self) -> Image.Image:
         """截取整个游戏窗口（使用PrintWindow获取高质量截图）"""
         self._activate_window()
-        import ctypes
-        from ctypes import wintypes
         if not self.window_hwnd:
             return None
-        rect = wintypes.RECT()
+        rect = ctypes.wintypes.RECT()
         ctypes.windll.user32.GetWindowRect(self.window_hwnd, ctypes.byref(rect))
         w = rect.right - rect.left
         h = rect.bottom - rect.top
@@ -337,10 +332,10 @@ class ScreenCapture:
                 # 转换为 PIL Image
                 class BITMAPINFOHEADER(ctypes.Structure):
                     _fields_ = [
-                        ('biSize', wintypes.DWORD), ('biWidth', wintypes.LONG), ('biHeight', wintypes.LONG),
-                        ('biPlanes', wintypes.WORD), ('biBitCount', wintypes.WORD), ('biCompression', wintypes.DWORD),
-                        ('biSizeImage', wintypes.DWORD), ('biXPelsPerMeter', wintypes.LONG),
-                        ('biYPelsPerMeter', wintypes.LONG), ('biClrUsed', wintypes.DWORD), ('biClrImportant', wintypes.DWORD)
+                        ('biSize', ctypes.wintypes.DWORD), ('biWidth', ctypes.wintypes.LONG), ('biHeight', ctypes.wintypes.LONG),
+                        ('biPlanes', ctypes.wintypes.WORD), ('biBitCount', ctypes.wintypes.WORD), ('biCompression', ctypes.wintypes.DWORD),
+                        ('biSizeImage', ctypes.wintypes.DWORD), ('biXPelsPerMeter', ctypes.wintypes.LONG),
+                        ('biYPelsPerMeter', ctypes.wintypes.LONG), ('biClrUsed', ctypes.wintypes.DWORD), ('biClrImportant', ctypes.wintypes.DWORD)
                     ]
                 bmi = BITMAPINFOHEADER()
                 bmi.biSize = ctypes.sizeof(BITMAPINFOHEADER)
@@ -371,9 +366,6 @@ class ScreenCapture:
                 return None
 
     def _capture_gdi(self) -> Image.Image:
-        import ctypes
-        from ctypes import wintypes
-
         try:
             user32 = ctypes.windll.user32
             gdi32 = ctypes.windll.gdi32
@@ -387,12 +379,12 @@ class ScreenCapture:
 
             class BITMAPINFOHEADER(ctypes.Structure):
                 _fields_ = [
-                    ('biSize', wintypes.DWORD), ('biWidth', wintypes.LONG),
-                    ('biHeight', wintypes.LONG), ('biPlanes', wintypes.WORD),
-                    ('biBitCount', wintypes.WORD), ('biCompression', wintypes.DWORD),
-                    ('biSizeImage', wintypes.DWORD), ('biXPelsPerMeter', wintypes.LONG),
-                    ('biYPelsPerMeter', wintypes.LONG), ('biClrUsed', wintypes.DWORD),
-                    ('biClrImportant', wintypes.DWORD)
+                    ('biSize', ctypes.wintypes.DWORD), ('biWidth', ctypes.wintypes.LONG),
+                    ('biHeight', ctypes.wintypes.LONG), ('biPlanes', ctypes.wintypes.WORD),
+                    ('biBitCount', ctypes.wintypes.WORD), ('biCompression', ctypes.wintypes.DWORD),
+                    ('biSizeImage', ctypes.wintypes.DWORD), ('biXPelsPerMeter', ctypes.wintypes.LONG),
+                    ('biYPelsPerMeter', ctypes.wintypes.LONG), ('biClrUsed', ctypes.wintypes.DWORD),
+                    ('biClrImportant', ctypes.wintypes.DWORD)
                 ]
 
             bmi = BITMAPINFOHEADER()
@@ -595,9 +587,8 @@ class ActionExecutor:
         expiration_seconds = int(expiration_days * 86400)
         try:
             import base64, io, urllib.request, urllib.parse
-            from PIL import Image as PILImage
             if image_path and os.path.isfile(image_path):
-                img = PILImage.open(image_path)
+                img = Image.open(image_path)
             elif image_data is not None:
                 img = image_data
             else:
@@ -606,7 +597,7 @@ class ActionExecutor:
             max_w = 1200
             if img.width > max_w:
                 ratio = max_w / img.width
-                img = img.resize((max_w, int(img.height * ratio)), PILImage.LANCZOS)
+                img = img.resize((max_w, int(img.height * ratio)), Image.LANCZOS)
             buf = io.BytesIO()
             img.save(buf, format='JPEG', quality=90)
             b64 = base64.b64encode(buf.getvalue()).decode('utf-8')
@@ -621,7 +612,8 @@ class ActionExecutor:
                 headers={'Content-Type': 'application/x-www-form-urlencoded'},
                 method='POST'
             )
-            with urllib.request.urlopen(upload_req, timeout=10) as upload_resp:
+            # 超时30秒，SSL握手慢时可能需要更长时间
+            with urllib.request.urlopen(upload_req, timeout=30) as upload_resp:
                 upload_result = json.loads(upload_resp.read().decode('utf-8'))
                 if upload_result.get('success'):
                     url = upload_result['data']['url']
@@ -630,6 +622,24 @@ class ActionExecutor:
                 else:
                     logging.warning(f"[图床] 上传失败: {upload_result}")
                     return ''
+        except urllib.error.URLError as e:
+            # SSL握手超时等网络问题，重试一次
+            logging.warning(f"[图床] 上传异常(将重试): {e}")
+            try:
+                import time
+                time.sleep(3)
+                with urllib.request.urlopen(upload_req, timeout=30) as upload_resp:
+                    upload_result = json.loads(upload_resp.read().decode('utf-8'))
+                    if upload_result.get('success'):
+                        url = upload_result['data']['url']
+                        logging.info(f"[图床] 重试上传成功: {url}")
+                        return url
+                    else:
+                        logging.warning(f"[图床] 重试上传失败: {upload_result}")
+                        return ''
+            except Exception as e2:
+                logging.warning(f"[图床] 重试上传异常: {e2}")
+                return ''
         except Exception as e:
             logging.warning(f"[图床] 上传异常: {e}")
             return ''
@@ -659,7 +669,6 @@ class ActionExecutor:
 
     def _release_all_keys(self):
         """释放所有可能卡住的按键（内部备用方法）"""
-        import ctypes
         stuck_keys = [
             0x57, 0x41, 0x53, 0x44,  # W A S D
             0xA0, 0xA1,              # LSHIFT RSHIFT
@@ -686,10 +695,39 @@ class ActionExecutor:
             logging.warning(f"无法映射按键: {key}")
             return
 
+        # 使用 SendInput + 扫描码发送按键，绕过输入法干扰
+        MAPVK_VK_TO_VSC = 0
+        KEYEVENTF_SCANCODE = 0x0008
+        KEYEVENTF_KEYUP = 0x0002
+        INPUT_KEYBOARD = 1
+        scan = ctypes.windll.user32.MapVirtualKeyW(vk_code, MAPVK_VK_TO_VSC)
+        if not scan:
+            # 回退到 keybd_event
+            for _ in range(presses):
+                ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+                time.sleep(duration)
+                ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
+                time.sleep(0.1)
+            return
+
         for _ in range(presses):
-            ctypes.windll.user32.keybd_event(vk_code, 0, 0, 0)
+            inp_down = _INPUT()
+            inp_down.type = INPUT_KEYBOARD
+            inp_down.union.ki.wVk = 0
+            inp_down.union.ki.wScan = scan
+            inp_down.union.ki.dwFlags = KEYEVENTF_SCANCODE
+            inp_down.union.ki.time = 0
+            inp_down.union.ki.dwExtraInfo = 0
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp_down), _INPUT_SIZE)
             time.sleep(duration)
-            ctypes.windll.user32.keybd_event(vk_code, 0, 2, 0)
+            inp_up = _INPUT()
+            inp_up.type = INPUT_KEYBOARD
+            inp_up.union.ki.wVk = 0
+            inp_up.union.ki.wScan = scan
+            inp_up.union.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+            inp_up.union.ki.time = 0
+            inp_up.union.ki.dwExtraInfo = 0
+            ctypes.windll.user32.SendInput(1, ctypes.byref(inp_up), _INPUT_SIZE)
             time.sleep(0.1)
 
     def _get_vk_code(self, key: str) -> int:
@@ -746,9 +784,6 @@ class ActionExecutor:
 
     def _screenshot_action(self, action: Dict):
         """截图动作：激活窗口并截取整个游戏窗口，保存到异常子目录"""
-        import ctypes
-        from ctypes import wintypes as w
-
         if not self.window_hwnd:
             logging.warning("[截图动作] 未设置窗口句柄，无法截图")
             return
@@ -758,7 +793,7 @@ class ActionExecutor:
 
         try:
             # 获取窗口矩形
-            rect = w.RECT()
+            rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(self.window_hwnd, ctypes.byref(rect))
             left, top = rect.left, rect.top
             right, bottom = rect.right, rect.bottom
@@ -885,7 +920,6 @@ class FrequencyAnalyzer:
                        stuck_threshold: int = None, stuck_ratio: float = None,
                        alternating_threshold: int = None, alternating_ratio: float = None,
                        window_seconds: float = None) -> dict:
-        from collections import Counter
 
         st = stuck_threshold if stuck_threshold is not None else self.stuck_threshold
         sr = stuck_ratio if stuck_ratio is not None else self.stuck_ratio
@@ -979,7 +1013,6 @@ class FrequencyAnalyzer:
         }
 
     def analyze(self, adaptive_params=None) -> dict:
-        from collections import Counter
 
         strategies = self.config.data.get('strategies', {})
         results = []
@@ -1771,7 +1804,6 @@ class StrategyEngine:
     @staticmethod
     def _html_to_plain(html):
         """简单提取 HTML 中的文本内容，用于邮件纯文本发送"""
-        import re
         text = re.sub(r'<style[^>]*>.*?</style>', '', html, flags=re.DOTALL)
         text = re.sub(r'<script[^>]*>.*?</script>', '', text, flags=re.DOTALL)
         text = re.sub(r'<br\s*/?>', '\n', text)
@@ -1961,7 +1993,7 @@ class StrategyEngine:
                 if not (start_minutes <= now_minutes < end_minutes):
                     logging.info(f"[统计报告] 当前时间{now_dt.strftime('%H:%M')}不在报告窗口({start_str}-{end_str})内，跳过")
                     return
-            except:
+            except Exception:
                 pass
         if not self.config.alert.get('stats_report_enabled', False):
             return
@@ -2034,7 +2066,6 @@ class StrategyEngine:
             except Exception as e:
                 logging.error(f"[统计报告-邮件] 发送失败: {e}")
 
-        import threading
         threading.Thread(target=_send_pushplus, daemon=True).start()
         threading.Thread(target=_send_email, daemon=True).start()
 
@@ -2118,9 +2149,7 @@ class GameMonitor:
         self._last_memory_check = 0
 
     def _get_ocr_engine(self):
-        """获取可用的OCR引擎（优先从game_monitor获取，其次从自身获取）"""
-        if self.game_monitor and hasattr(self.game_monitor, 'ocr_engine') and self.game_monitor.ocr_engine:
-            return self.game_monitor.ocr_engine
+        """获取可用的OCR引擎"""
         if hasattr(self, 'ocr_engine') and self.ocr_engine:
             return self.ocr_engine
         return None
@@ -2185,7 +2214,7 @@ class GameMonitor:
                 logging.warning("未找到游戏窗口，尝试触发重启流程")
                 # 检查重启器是否启用
                 if hasattr(self, 'restarter') and self.restarter and self.restarter.enabled:
-                    self.restarter.start_restart('启动时游戏窗口不存在')
+                    self.restarter.start_restart('启动时游戏窗口不存在', auto_restart=True)
                     # 等待重启完成（最多等10分钟）
                     if hasattr(self.restarter, '_restart_thread') and self.restarter._restart_thread:
                         self.restarter._restart_thread.join(timeout=600)
@@ -2288,7 +2317,7 @@ class GameMonitor:
                             if now_dt.hour == target_h and now_dt.minute >= target_m:
                                 should_stop = True
                                 stop_reason = f'到达指定时间{stop_at}'
-                        except:
+                        except Exception:
                             pass
                     # 条件3: 总轮数
                     max_rounds = idle_cfg.get('stop_after_rounds', 0)
@@ -2309,7 +2338,7 @@ class GameMonitor:
                         try:
                             self.executor._activate_window()
                             self.executor._send_key_action({'key': 'p', 'presses': 1, 'interval': 0.5})
-                        except:
+                        except Exception:
                             pass
                         self.running = False
                         # 取消挂机启用，避免下次启动自动停止
@@ -2361,6 +2390,7 @@ class GameMonitor:
                                     break
                             # diff == 1: 正常+1
                             logging.info(f"[轮数] 检测到轮数变化: {self._last_known_round} -> {new_round}")
+                            self._round_events[new_round] = time.time()
                             self._pending_round = None
                             self._pending_round_count = 0
                         self._last_known_round = new_round
@@ -2398,7 +2428,7 @@ class GameMonitor:
                             in_cooldown=in_cd
                         )
                         if should_restart:
-                            self.restarter.start_restart(reason)
+                            self.restarter.start_restart(reason, auto_restart=True)
                             break
 
                 # 分析频率降低：每5轮分析一次（节省CPU）
@@ -2502,6 +2532,30 @@ class GameMonitor:
             logging.warning(f"热键设置失败: {e}")
 
 
+# Windows INPUT 结构体定义（用于 SendInput，GameRestarter 和 StrategyExecutor 共用）
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
+                ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
+                ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t)]
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
+                ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
+                ("dwExtraInfo", ctypes.c_size_t)]
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [("uMsg", ctypes.c_ulong), ("wParamL", ctypes.c_ushort),
+                ("wParamH", ctypes.c_ushort)]
+
+class _INPUT_UNION(ctypes.Union):
+    _fields_ = [("mi", _MOUSEINPUT), ("ki", _KEYBDINPUT), ("hi", _HARDWAREINPUT)]
+
+class _INPUT(ctypes.Structure):
+    _fields_ = [("type", ctypes.c_ulong), ("union", _INPUT_UNION)]
+
+_INPUT_SIZE = ctypes.sizeof(_INPUT)
+
+
 class GameRestarter:
     """游戏自动重启器 - 检测异常后自动重启游戏并恢复配置"""
 
@@ -2520,14 +2574,27 @@ class GameRestarter:
         self._saved_config_images = {}
         # 加载已保存的配置截图
         self._load_saved_configs()
+        # 当前使用的SMD配置文件路径（可由主界面动态更新）
+        self.smd_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        # GUI当前选定的脚本（由主界面在启动重启前设置，特殊操作优先使用）
+        self._gui_selected_script = ''
+        self._gui_script_type = ''
+
+        # OCR结果缓存（减少重复全屏OCR）
+        self._ocr_cache = None  # (rect_tuple, ocr_items, timestamp)
+        self._ocr_cache_ttl = 2.0  # 缓存有效期（秒）
+
+        # 重试配置
+        self._ocr_retry_count = 3  # 单个元素识别失败重试次数
+        self._tab_retry_count = 2  # 标签页失败后重试次数
+        self._tab_max_failures = 3  # 单个标签页内连续失败次数阈值，超过则重进标签页
 
         # 创建重启流程专用日志toast窗口
         self._init_toast_window()
 
     def _init_toast_window(self):
-        """创建重启流程专用的居中浮动日志toast窗口"""
+        """创建重启流程专用的左侧浮动日志toast窗口（不干扰游戏和音乐盒子）"""
         try:
-            import tkinter as tk
             if self.tk_root:
                 self._toast_root = self.tk_root
                 self._toast_window = tk.Toplevel(self._toast_root)
@@ -2536,21 +2603,38 @@ class GameRestarter:
                 self._toast_root.withdraw()  # 隐藏主窗口
                 self._toast_window = tk.Toplevel(self._toast_root)
             self._toast_window.overrideredirect(True)
-            self._toast_window.attributes('-topmost', True)
-            # 居中
+            # 不抢焦点：允许其他窗口保持置顶
+            self._toast_window.attributes('-topmost', False)
+            # 左侧窄条
             sw = self._toast_root.winfo_screenwidth()
             sh = self._toast_root.winfo_screenheight()
-            w, h = 650, 320
-            x = (sw - w) // 2
+            w, h = 380, min(500, sh - 100)
+            x = 10
             y = (sh - h) // 2
             self._toast_window.geometry(f'{w}x{h}+{x}+{y}')
             self._toast_window.configure(bg='#1a1a2e')
+
+            # 标题栏
+            title_frame = tk.Frame(self._toast_window, bg='#16213e', height=24)
+            title_frame.pack(fill=tk.X)
+            title_frame.pack_propagate(False)
+            tk.Label(title_frame, text=' SMD 重启日志', bg='#16213e', fg='#58a6ff',
+                     font=('Microsoft YaHei UI', 8, 'bold'), anchor='w').pack(side=tk.LEFT, padx=5)
+
             # Text控件
             self._toast_text = tk.Text(self._toast_window, bg='#0a0a1a', fg='#00ff88',
-                                       font=('Consolas', 10), wrap=tk.WORD, state=tk.DISABLED,
-                                       relief=tk.FLAT, padx=10, pady=10)
-            self._toast_text.pack(fill=tk.BOTH, expand=True)
+                                       font=('Consolas', 9), wrap=tk.WORD, state=tk.DISABLED,
+                                       relief=tk.FLAT, padx=8, pady=8)
+            # 添加滚动条
+            toast_scroll = tk.Scrollbar(self._toast_window, command=self._toast_text.yview)
+            self._toast_text.configure(yscrollcommand=toast_scroll.set)
+            self._toast_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            toast_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+
             self._toast_window.withdraw()  # 初始隐藏
+
+            # 记录游戏窗口句柄，显示toast时不抢焦点
+            self._toast_game_hwnd = None
         except Exception as e:
             logging.warning(f"[重启] 创建toast窗口失败: {e}")
             self._toast_root = None
@@ -2558,7 +2642,7 @@ class GameRestarter:
             self._toast_text = None
 
     def show_toast_log(self, msg):
-        """在toast窗口追加一行日志（线程安全）"""
+        """在toast窗口追加一行日志（线程安全，不抢焦点）"""
         if not self._toast_root or not self._toast_text:
             return
         try:
@@ -2569,11 +2653,16 @@ class GameRestarter:
                     timestamp = datetime.now().strftime('%H:%M:%S')
                     self._toast_text.config(state=tk.NORMAL)
                     self._toast_text.insert(tk.END, f"[{timestamp}] {msg}\n")
+                    # 限制最大行数
+                    total_lines = int(self._toast_text.index('end-1c').split('.')[0])
+                    if total_lines > 300:
+                        self._toast_text.delete('1.0', f'{total_lines - 300}.0')
                     self._toast_text.see(tk.END)
                     self._toast_text.config(state=tk.DISABLED)
-                    # 确保窗口显示
+                    # 确保窗口显示，但不抢焦点
                     if self._toast_window and self._toast_window.winfo_exists():
                         self._toast_window.deiconify()
+                        self._toast_window.attributes('-topmost', False)
                 except Exception:
                     pass
             self._toast_root.after(0, _append)
@@ -2610,10 +2699,9 @@ class GameRestarter:
                 key = fname[:-4]
                 fpath = os.path.join(save_dir, fname)
                 try:
-                    from PIL import Image as PILImage
                     with open(fpath, 'rb') as f:
                         img_data = pickle.load(f)
-                    if isinstance(img_data, PILImage.Image):
+                    if isinstance(img_data, Image.Image):
                         self._saved_config_images[key] = img_data
                         logging.info(f"[重启] 加载配置截图: {key}")
                 except Exception as e:
@@ -2659,15 +2747,17 @@ class GameRestarter:
             return True, ' | '.join(reasons)
         return False, ''
 
-    def start_restart(self, reason=''):
-        """在后台线程中执行重启流程"""
+    def start_restart(self, reason='', auto_restart=False):
+        """在后台线程中执行重启流程（始终从阶段0开始）"""
         if self._is_restarting:
             return
         self._is_restarting = True
         self._stop_requested = False
+        self._auto_restart = auto_restart
         logging.warning(f"[重启] ========== 开始重启流程 ==========")
         logging.warning(f"[重启] 触发原因: {reason}")
-        self._restart_thread = threading.Thread(target=self._restart_flow, daemon=True)
+        self._restart_thread = threading.Thread(
+            target=self._restart_flow, daemon=True)
         self._restart_thread.start()
 
     def stop_restart(self):
@@ -2676,106 +2766,8 @@ class GameRestarter:
             self._stop_requested = True
             logging.warning("[重启] 收到停止请求，将在当前阶段完成后停止")
 
-    def _detect_start_phase(self):
-        """根据当前系统状态判断应该从哪个阶段开始重启
-        返回阶段索引: 0=从头开始, 1=从关闭进程开始, 3=从启动游戏开始,
-                      4=从等待原力加载开始, 5=从进入游戏开始, 6=从恢复配置开始
-        """
-        game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
-        GWL_STYLE = -16
-        WS_CAPTION = 0x00C00000
-        import subprocess
-
-        # 检查游戏窗口是否已存在且已过logo（有标题栏）
-        game_ready = False
-        if game_title:
-            hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
-            if hwnd:
-                style = ctypes.windll.user32.GetWindowLongW(hwnd, GWL_STYLE)
-                if style & WS_CAPTION:
-                    game_ready = True
-
-        # 检查是否有原力浮动信息
-        force_loaded = False
-        if game_ready and game_title and self.game_monitor and self.game_monitor.ocr_engine:
-            try:
-                from PIL import ImageGrab
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                w = rect.right - rect.left
-                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.left + w // 3, rect.bottom))
-                text = self.game_monitor.ocr_engine.recognize(img)
-                float_keywords = ['ins', '隐藏', '无限', 'INS', '子弹', '功能组']
-                if any(kw in text for kw in float_keywords):
-                    force_loaded = True
-            except Exception:
-                pass
-
-        # 检查地图是否已打开
-        map_open = False
-        if game_ready and game_title and self.game_monitor and self.game_monitor.ocr_engine:
-            try:
-                from PIL import ImageGrab
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
-                text = self.game_monitor.ocr_engine.recognize(img)
-                map_keywords = ['报复行动', '猎捕行动', '悬赏', '全部']
-                if any(kw in text for kw in map_keywords):
-                    map_open = True
-            except Exception:
-                pass
-
-        # 检查rundll32窗口是否存在
-        has_rundll = self._find_rundll32_window() is not None
-
-        # 检查进程是否还在运行
-        try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq rundll32.exe', '/FO', 'CSV', '/NH'],
-                                    capture_output=True, text=True, timeout=5)
-            lines = [l for l in result.stdout.strip().split('\n') if l.strip()]
-            has_rundll_process = len(lines) > 1
-        except Exception:
-            has_rundll_process = False
-
-        # 判断从哪个阶段开始
-        if map_open and force_loaded:
-            logging.info("[重启] 检测到游戏已在地图中且原力已加载，从阶段6(恢复配置)开始")
-            self.show_toast_log("检测到游戏已在地图中且原力已加载，从阶段6开始")
-            return 6
-        if game_ready and force_loaded:
-            logging.info("[重启] 检测到游戏已就绪且原力已加载，从阶段5(进入游戏)开始")
-            self.show_toast_log("检测到游戏已就绪且原力已加载，从阶段5开始")
-            return 5
-        if game_ready:
-            logging.info("[重启] 检测到游戏窗口已就绪，从阶段4(等待原力加载)开始")
-            self.show_toast_log("检测到游戏窗口已就绪，从阶段4开始")
-            return 4
-        if has_rundll or has_rundll_process:
-            logging.info("[重启] 检测到原力已启动，从阶段3(启动游戏)开始")
-            self.show_toast_log("检测到原力已启动，从阶段3开始")
-            return 3
-
-        # 检查是否有游戏进程在运行
-        try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq TheDivision2.exe', '/FO', 'CSV', '/NH'],
-                                    capture_output=True, text=True, timeout=5)
-            lines = [l for l in result.stdout.strip().split('\n') if l.strip()]
-            has_game_process = len(lines) > 0
-        except Exception:
-            has_game_process = False
-
-        if has_game_process or has_rundll_process:
-            logging.info("[重启] 检测到进程仍在运行，从阶段1(关闭进程)开始")
-            self.show_toast_log("检测到进程仍在运行，从阶段1开始")
-            return 1
-
-        logging.info("[重启] 未检测到运行状态，从头开始")
-        self.show_toast_log("未检测到运行状态，从头开始")
-        return 0
-
     def _restart_flow(self):
-        """完整的重启流程（支持断点续启）"""
+        """完整的重启流程（始终从阶段0开始），失败阶段自动重试"""
         try:
             self.show_toast_log("========== 开始重启流程 ==========")
 
@@ -2789,21 +2781,37 @@ class GameRestarter:
                 ('阶段7: 恢复监控', self._phase_resume_monitor),
             ]
 
-            # 检测应该从哪个阶段开始
-            start_idx = self._detect_start_phase()
-            if start_idx > 0:
-                skipped = [p[0] for p in phases[:start_idx]]
-                logging.info(f"[重启] 跳过已完成的阶段: {skipped}")
-                self.show_toast_log(f"跳过已完成的阶段: {', '.join(skipped)}")
+            phase_max_retries = 3  # 每个阶段最大重试次数
 
             for i, (phase_name, phase_func) in enumerate(phases):
-                if i < start_idx:
+                # 手动一键重启时跳过停止/恢复监控阶段
+                if not self._auto_restart and i in (0, 6):
+                    logging.info(f"[重启] 跳过 {phase_name}（手动重启不恢复监控）")
                     continue
                 if self._stop_requested:
                     logging.warning(f"[重启] 停止请求已触发，跳过 {phase_name}")
                     self.show_toast_log(f"停止请求已触发，跳过 {phase_name}")
                     break
-                phase_func()
+
+                # 执行阶段，失败时重试
+                phase_ok = False
+                for retry in range(phase_max_retries):
+                    if self._stop_requested:
+                        break
+                    if retry > 0:
+                        logging.info(f"[重启] {phase_name} 第{retry + 1}次重试...")
+                        self.show_toast_log(f"{phase_name} 重试({retry + 1})")
+                    result = phase_func()
+                    # 阶段返回 None 或 True 表示成功
+                    if result is None or result is True:
+                        phase_ok = True
+                        break
+                    # False 表示失败，继续重试
+
+                if not phase_ok and not self._stop_requested:
+                    logging.error(f"[重启] {phase_name} 失败（已重试{phase_max_retries}次），终止流程")
+                    self.show_toast_log(f"{phase_name} 失败，流程终止")
+                    break
 
             if not self._stop_requested:
                 logging.warning(f"[重启] ========== 重启流程完成 ==========")
@@ -2823,6 +2831,43 @@ class GameRestarter:
             time.sleep(3)
             self.hide_toast()
 
+    def start_quick_config(self):
+        """一键配置：只执行阶段5+6（进游戏判断→按M打开地图→F11配置）"""
+        if self._is_restarting:
+            return
+        self._is_restarting = True
+        self._stop_requested = False
+        logging.warning(f"[重启] ========== 开始一键配置 ==========")
+        self._restart_thread = threading.Thread(
+            target=self._quick_config_flow, daemon=True)
+        self._restart_thread.start()
+
+    def _quick_config_flow(self):
+        """只执行阶段5+6：进游戏判断 → 按M打开地图 → F11配置"""
+        try:
+            self.show_toast_log("========== 开始一键配置 ==========")
+            game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
+            if not game_title:
+                self.show_toast_log("错误: 游戏标题未设置")
+                return
+            self._phase_enter_game()
+            if not self._stop_requested:
+                logging.warning(f"[重启] ========== 一键配置完成 ==========")
+                self.show_toast_log("========== 一键配置完成 ==========")
+            else:
+                logging.warning(f"[重启] ========== 一键配置已中止 ==========")
+                self.show_toast_log("========== 一键配置已中止 ==========")
+        except Exception as e:
+            logging.error(f"[重启] 一键配置异常: {e}")
+            import traceback
+            logging.error(traceback.format_exc())
+            self.show_toast_log(f"一键配置异常: {e}")
+        finally:
+            self._is_restarting = False
+            self._stop_requested = False
+            time.sleep(3)
+            self.hide_toast()
+
     def _phase_stop_monitor(self):
         """阶段0: 停止当前监控"""
         logging.info("[重启] 阶段0: 停止监控")
@@ -2838,30 +2883,42 @@ class GameRestarter:
         self.show_toast_log("关闭游戏和rundll32")
         import subprocess
 
-        # 强制结束游戏进程（通过窗口标题找到PID再taskkill）
+        # 强制结束游戏进程
         game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
+        game_killed = False
+
         if game_title:
-            # 先尝试FindWindow + WM_CLOSE
+            # 先尝试FindWindow + WM_CLOSE（正常关闭）
             hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
             if hwnd:
                 ctypes.windll.user32.PostMessageW(hwnd, 0x0010, 0, 0)  # WM_CLOSE
                 logging.info(f"[重启] 已发送WM_CLOSE到游戏窗口")
                 time.sleep(3)
-            # 检查是否还在，在则taskkill /F
-            hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
-            if hwnd:
-                GetWindowThreadProcessId = ctypes.windll.user32.GetWindowThreadProcessId
-                pid = ctypes.c_ulong()
-                GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-                if pid.value:
-                    try:
-                        result = subprocess.run(['taskkill', '/F', '/PID', str(pid.value)],
-                                              capture_output=True, timeout=10)
-                        logging.info(f"[重启] 已taskkill游戏进程 PID={pid.value}")
-                        self.show_toast_log(f"已taskkill游戏进程 PID={pid.value}")
-                    except Exception as e:
-                        logging.warning(f"[重启] taskkill游戏失败: {e}")
-                time.sleep(2)
+
+            # 无论窗口是否存在，都通过进程名强制终止（处理卡窗口无窗口的情况）
+            game_process_name = 'TheDivision2.exe'
+            for _ in range(3):
+                try:
+                    result = subprocess.run(['tasklist', '/FI', f'IMAGENAME eq {game_process_name}',
+                                             '/FO', 'CSV', '/NH'],
+                                            capture_output=True, text=True, timeout=10)
+                    lines = [l for l in result.stdout.strip().split('\n') if l.strip()]
+                    if len(lines) <= 1:
+                        logging.info(f"[重启] {game_process_name} 已不存在")
+                        game_killed = True
+                        break
+                    # 进程仍在，强制结束
+                    result = subprocess.run(['taskkill', '/F', '/IM', game_process_name],
+                                          capture_output=True, timeout=10)
+                    logging.info(f"[重启] 已taskkill {game_process_name}")
+                    self.show_toast_log(f"已taskkill {game_process_name}")
+                    time.sleep(2)
+                except Exception as e:
+                    logging.warning(f"[重启] 结束{game_process_name}失败: {e}")
+                    break
+
+            if not game_killed:
+                logging.warning(f"[重启] {game_process_name}可能仍在运行，继续后续流程")
 
         # 强制结束rundll32.exe
         for _ in range(3):
@@ -2905,7 +2962,8 @@ class GameRestarter:
             if self._stop_requested:
                 return
             logging.info(f"[重启] 启动bat (第{attempt}次): {bat_path}")
-            subprocess.Popen(['cmd', '/c', bat_path], cwd=os.path.dirname(bat_path))
+            subprocess.Popen(['cmd', '/c', bat_path], cwd=os.path.dirname(bat_path),
+                             creationflags=0x08000000)  # CREATE_NO_WINDOW
             # 延时等待进程稳定
             time.sleep(5)
             # 检测rundll32.exe窗口是否出现
@@ -2943,7 +3001,7 @@ class GameRestarter:
         hwnd = self._find_rundll32_window()
         if not hwnd:
             logging.error("[重启] 未找到原力窗口，无法点击播放")
-            return
+            return False
 
         play_text = self.restart_config.get('play_button_text', '播放')
         wait_text = self.restart_config.get('play_wait_text', '等待歌曲启动后点击')
@@ -2953,7 +3011,7 @@ class GameRestarter:
             time.sleep(0.5)
             if not self._click_ocr_button(hwnd, play_text):
                 logging.error("[重启] 第一次播放: 未能找到播放按钮")
-                return
+                return False
             logging.info("[重启] 第一次播放: 已点击'播放'按钮")
             self.show_toast_log("已点击播放（第一次）")
 
@@ -2971,7 +3029,8 @@ class GameRestarter:
                     os.startfile(game_shortcut)
                 elif os.path.isfile(game_shortcut):
                     import subprocess
-                    subprocess.Popen([game_shortcut])
+                    subprocess.Popen([game_shortcut],
+                                     creationflags=0x08000000)  # CREATE_NO_WINDOW
                 else:
                     logging.warning(f"[重启] 快捷方式无效: {game_shortcut}")
                 logging.info(f"[重启] 已启动游戏: {game_shortcut}")
@@ -2983,13 +3042,13 @@ class GameRestarter:
         game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
         if not game_title:
             logging.error("[重启] 未配置游戏标题")
-            return
+            return False
 
         logging.info(f"[重启] 等待游戏窗口出现(标题: {game_title})")
         game_hwnd = self._wait_for_window(title=game_title, timeout=120)
         if not game_hwnd:
             logging.error("[重启] 等待游戏窗口超时")
-            return
+            return False
         logging.info("[重启] 游戏窗口已出现")
 
         # ===== 等待logo界面过去 =====
@@ -3047,7 +3106,6 @@ class GameRestarter:
                     self._activate_window(hwnd)
                     time.sleep(0.3)
                     try:
-                        from PIL import ImageGrab
                         rect = ctypes.wintypes.RECT()
                         ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
                         img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
@@ -3110,6 +3168,7 @@ class GameRestarter:
                 self._activate_window(game_hwnd)
                 logging.info("[重启] 已前显游戏窗口")
                 self.show_toast_log("已前显游戏窗口")
+        return True
 
     def _phase_wait_game_ready(self):
         """阶段4: 等待原力加载成功（游戏左侧出现红色浮动信息）"""
@@ -3131,7 +3190,6 @@ class GameRestarter:
                 continue
 
             try:
-                from PIL import ImageGrab
                 rect = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 w = rect.right - rect.left
@@ -3210,9 +3268,10 @@ class GameRestarter:
             logging.info("[重启] 已按M关闭地图")
             self.show_toast_log("关闭地图")
             time.sleep(1)
-            return
+            return True
 
         logging.warning("[重启] 多次尝试后仍未完成，继续后续流程")
+        return False
 
     def _check_in_menu(self, game_title):
         """检测是否还在主菜单/加载界面"""
@@ -3220,7 +3279,6 @@ class GameRestarter:
         if not hwnd:
             return False
         try:
-            from PIL import ImageGrab
             rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
             img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
@@ -3239,7 +3297,6 @@ class GameRestarter:
         if not hwnd:
             return False
         try:
-            from PIL import ImageGrab
             rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
             img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
@@ -3265,13 +3322,12 @@ class GameRestarter:
             return False
 
         # 加载SMD配置
-        smd_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        smd_config_path = self.smd_config_path
         if not os.path.isfile(smd_config_path):
             logging.info("[重启] 无SMD配置文件，跳过配置恢复")
             return True  # 无配置算成功
 
         try:
-            import json
             with open(smd_config_path, 'r', encoding='utf-8') as f:
                 smd_data = json.load(f)
         except Exception as e:
@@ -3292,6 +3348,7 @@ class GameRestarter:
 
         # 遍历每个标签页的设定参数
         # 需要先点击标签切换到对应页面，再设置参数
+        # 支持标签页级重试：单个参数连续失败超过阈值时，重新点击标签并重试该标签页
         from smd_config_editor import SMD_TABS
         for tab_info in SMD_TABS:
             if self._stop_requested:
@@ -3303,36 +3360,68 @@ class GameRestarter:
             if not items:
                 continue
 
-            # 先点击标签切换到对应页面
-            logging.info(f"[重启] 切换到标签: {tab_name}")
-            self.show_toast_log(f"切换到标签: {tab_name}")
-            self._activate_window(hwnd)
-            time.sleep(0.3)
-            if not self._click_ocr_in_game(hwnd, tab_name):
-                logging.warning(f"[重启] 未找到标签 '{tab_name}'，跳过")
-                continue
-            time.sleep(1.5)  # 等待标签切换完成
-
-            # 执行操作类型参数（如加载基础参数、点击加载等）
-            for item in items:
+            # 标签页级重试
+            tab_success = False
+            for tab_attempt in range(self._tab_retry_count + 1):
                 if self._stop_requested:
                     break
-                if item.get('item_type') != 'action':
-                    continue
-                ocr_label = item.get('ocr_label', item.get('name', ''))
-                if ocr_label:
-                    logging.info(f"[重启] 执行操作: {ocr_label}")
-                    self._click_ocr_in_game(hwnd, ocr_label)
-                    time.sleep(1.5)
+                if tab_attempt > 0:
+                    logging.info(f"[重启] 标签 '{tab_name}' 第{tab_attempt}次重试...")
+                    self.show_toast_log(f"标签重试: {tab_name} ({tab_attempt}/{self._tab_retry_count})")
 
-            # 设置普通参数
-            for item in items:
-                if self._stop_requested:
+                # 先点击标签切换到对应页面
+                logging.info(f"[重启] 切换到标签: {tab_name}")
+                self.show_toast_log(f"切换到标签: {tab_name}")
+                self._activate_window(hwnd)
+                time.sleep(0.3)
+                if not self._click_ocr_in_game(hwnd, tab_name):
+                    logging.warning(f"[重启] 未找到标签 '{tab_name}'，跳过")
                     break
-                if item.get('item_type') == 'action':
-                    continue
-                self._set_smd_parameter(hwnd, item)
-                time.sleep(0.5)
+                time.sleep(1.2)  # 等待标签切换完成
+                self._invalidate_ocr_cache()
+
+                # 按配置顺序逐个执行参数（保持action和普通参数的原始顺序）
+                consecutive_failures = 0
+                all_success = True
+                for item_idx, item in enumerate(items):
+                    if self._stop_requested:
+                        break
+                    ocr_label = item.get('ocr_label', item.get('name', ''))
+                    success = True
+
+                    if item.get('item_type') == 'action':
+                        if ocr_label:
+                            logging.info(f"[重启] 执行操作: {ocr_label}")
+                            success = self._click_ocr_in_game(hwnd, ocr_label)
+                            time.sleep(1.2)
+                    else:
+                        # item_type 为 special 时强制使用 special 方法
+                        item_to_set = item
+                        if item.get('item_type') == 'special':
+                            item_to_set = dict(item)
+                            item_to_set['value_set_method'] = 'special'
+                        success = self._set_smd_parameter(hwnd, item_to_set)
+                        time.sleep(0.3)
+
+                    if success:
+                        consecutive_failures = 0
+                    else:
+                        consecutive_failures += 1
+                        all_success = False
+                        logging.warning(f"[重启] 参数 '{ocr_label}' 设置失败（连续失败{consecutive_failures}次）")
+
+                        # 连续失败超过阈值，重新从标签页开始
+                        if consecutive_failures >= self._tab_max_failures:
+                            logging.warning(f"[重启] 标签 '{tab_name}' 连续失败{consecutive_failures}个参数，重新进入标签页...")
+                            break
+
+                # 如果全部成功，或者不是因为连续失败而中断，则跳出标签重试循环
+                if all_success or consecutive_failures < self._tab_max_failures:
+                    tab_success = all_success
+                    break
+
+            if not tab_success:
+                logging.warning(f"[重启] 标签 '{tab_name}' 配置恢复失败（已重试{self._tab_retry_count}次）")
 
         # F11关闭原力配置界面
         time.sleep(1)
@@ -3347,21 +3436,92 @@ class GameRestarter:
         return self._phase_restore_config()
 
     def _normalize_match_text(self, text):
-        """规范化匹配文本：去掉 - ( ) 等干扰符号"""
-        return text.replace('-', '').replace('－', '').replace('(', '').replace(')', '').replace('（', '').replace('）', '').replace(' ', '')
+        """规范化匹配文本：去掉 - ( ) _ 等干扰符号"""
+        return (text.replace('-', '').replace('－', '')
+                .replace('(', '').replace(')', '')
+                .replace('（', '').replace('）', '')
+                .replace('_', '').replace(' ', ''))
 
-    def _click_ocr_in_game(self, hwnd, text):
-        """在游戏窗口中OCR找到文字并点击（忽略 - ( ) 等符号）
-        当OCR文本比搜索文本长时，自动估算目标文字在OCR文本中的位置偏移
+    def _strip_bin(self, name):
+        """去掉 .bin 后缀"""
+        if name and name.lower().endswith('.bin'):
+            return name[:-4]
+        return name
+
+    def _normalize_script_name(self, text):
+        """专门用于脚本名匹配的规范化：去掉更多干扰符号、统一小写"""
+        return (text.replace('-', '').replace('－', '')
+                .replace('(', '').replace(')', '')
+                .replace('（', '').replace('）', '')
+                .replace('_', '').replace(' ', '')
+                .replace('.', '').replace('x', '').replace('X', '')
+                .lower())
+
+    def _match_script_name(self, target, ocr_text):
+        """匹配脚本名：去掉.bin、干扰符号和x后，统一小写，支持截断匹配"""
+        t = self._normalize_script_name(self._strip_bin(target))
+        o = self._normalize_script_name(self._strip_bin(ocr_text))
+        if not t or not o:
+            return False
+        if t in o or o in t:
+            return True
+        min_len = min(len(t), len(o))
+        if min_len >= 3:
+            return t[:min_len] == o[:min_len]
+        return False
+
+    def _get_cached_ocr(self, hwnd, force_refresh=False):
+        """获取全屏OCR结果（带缓存）
+        force_refresh: True 时强制刷新缓存
+        返回: (ocr_items, rect) 或 (None, None)
         """
         try:
-            from PIL import ImageGrab
             rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+            rect_tuple = (rect.left, rect.top, rect.right, rect.bottom)
+            now = time.time()
 
-            if self._get_ocr_engine():
-                items = self._get_ocr_engine().recognize_with_pos(img)
+            # 检查缓存是否有效
+            if (not force_refresh and self._ocr_cache and
+                    self._ocr_cache[0] == rect_tuple and
+                    now - self._ocr_cache[2] < self._ocr_cache_ttl):
+                return self._ocr_cache[1], rect
+
+            # 重新OCR
+            ocr_engine = self.game_monitor._get_ocr_engine()
+            if not ocr_engine:
+                return None, rect
+
+            img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+            items = ocr_engine.recognize_with_pos(img)
+            self._ocr_cache = (rect_tuple, items, now)
+            return items, rect
+        except Exception as e:
+            logging.debug(f"[重启] 缓存OCR异常: {e}")
+            return None, None
+
+    def _invalidate_ocr_cache(self):
+        """使OCR缓存失效（UI发生变化后调用）"""
+        self._ocr_cache = None
+
+    def _click_ocr_in_game(self, hwnd, text, retry_count=None):
+        """在游戏窗口中OCR找到文字并点击（忽略 - ( ) 等符号）
+        当OCR文本比搜索文本长时，自动估算目标文字在OCR文本中的位置偏移
+        retry_count: 重试次数，默认使用 self._ocr_retry_count
+        """
+        if retry_count is None:
+            retry_count = self._ocr_retry_count
+
+        for attempt in range(retry_count):
+            if self._stop_requested:
+                return False
+            try:
+                items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                if not items:
+                    if attempt < retry_count - 1:
+                        time.sleep(0.3)
+                    continue
+
                 norm_text = self._normalize_match_text(text)
                 # 收集所有匹配项，优先选择长度最接近的（最精确匹配）
                 candidates = []
@@ -3390,21 +3550,35 @@ class GameRestarter:
                     abs_y = rect.top + cy
                     logging.info(f"[重启] 游戏内OCR匹配到'{text}'（OCR原文:'{best_ocr}'），点击: ({cx}, {cy})")
                     self._activate_window(hwnd)
-                    time.sleep(0.2)
+                    time.sleep(0.15)
                     ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-                    time.sleep(0.1)
-                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
                     time.sleep(0.05)
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    time.sleep(0.03)
                     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-                    time.sleep(0.3)
+                    time.sleep(0.2)
+                    # 点击后UI可能变化，使缓存失效
+                    self._invalidate_ocr_cache()
                     return True
-                logging.warning(f"[重启] 游戏内未匹配到'{text}'")
-        except Exception as e:
-            logging.error(f"[重启] 游戏内OCR点击异常: {e}")
+
+                if attempt < retry_count - 1:
+                    logging.info(f"[重启] 游戏内未匹配到'{text}'，第{attempt + 1}次重试...")
+                    time.sleep(0.3)
+            except Exception as e:
+                logging.error(f"[重启] 游戏内OCR点击异常: {e}")
+                if attempt < retry_count - 1:
+                    time.sleep(0.3)
+
+        logging.warning(f"[重启] 游戏内未匹配到'{text}'（已重试{retry_count}次）")
         return False
 
-    def _set_smd_parameter(self, hwnd, item):
-        """设置单个SMD参数（原力界面：控件在左，标题在右）"""
+    def _set_smd_parameter(self, hwnd, item, retry_count=None):
+        """设置单个SMD参数（原力界面：控件在左，标题在右）
+        返回: True 成功, False 失败
+        """
+        if retry_count is None:
+            retry_count = self._ocr_retry_count
+
         name = item.get('name', '')
         ocr_label = item.get('ocr_label', '')
         item_type = item.get('item_type', 'toggle')
@@ -3412,7 +3586,7 @@ class GameRestarter:
         method = item.get('value_set_method', 'click')
 
         if not ocr_label:
-            return
+            return True
 
         logging.info(f"[重启] 设置参数: {name} = {target_value} (类型:{item_type}, 方式:{method})")
 
@@ -3420,22 +3594,22 @@ class GameRestarter:
             # 开关/下拉框：控件在左，标题在右
             # 下拉框：需要先点击控件(当前值区域)展开列表，再选择目标值
             # 开关：直接点击控件区域即可切换
-            if item_type == 'select':
+            if item_type == 'dropdown':
                 # 下拉框操作（原力界面布局：[当前值 | ▼] ... 标题文字）
                 # 1. OCR找到标题文字位置
                 # 2. 在标题左侧找下拉箭头(▼)按钮并点击展开
                 # 3. 在展开列表中找到目标值并点击
                 logging.info(f"[重启] 下拉框: 找标题'{ocr_label}'，展开后选'{target_value}'")
-                try:
-                    from PIL import ImageGrab
-                    import numpy as np
-                    import cv2
-                    rect = ctypes.wintypes.RECT()
-                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                    img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+                for attempt in range(retry_count):
+                    if self._stop_requested:
+                        return False
+                    try:
+                        items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                        if not items:
+                            if attempt < retry_count - 1:
+                                time.sleep(0.3)
+                            continue
 
-                    if self._get_ocr_engine():
-                        items = self._get_ocr_engine().recognize_with_pos(img)
                         norm_label = self._normalize_match_text(ocr_label)
                         # 找标题文字位置
                         title_pos = None
@@ -3444,46 +3618,56 @@ class GameRestarter:
                                 title_pos = (cx, cy)
                                 break
                         if not title_pos:
-                            logging.warning(f"[重启] 下拉框: 未找到标题 '{ocr_label}'")
-                            return
+                            if attempt < retry_count - 1:
+                                logging.info(f"[重启] 下拉框: 未找到标题 '{ocr_label}'，第{attempt + 1}次重试...")
+                                time.sleep(0.3)
+                            continue
 
-                        # 3. 点击标题左侧固定偏移处的下拉箭头(▼)
+                        # 点击标题左侧固定偏移处的下拉箭头(▼)
                         # 原力界面布局: [当前值文本 | ▼] ... 标题文字
-                        # 箭头按钮在标题左侧约100px处
-                        arrow_x = title_pos[0] - 100
-                        arrow_y = title_pos[1]
+                        char_count = len(ocr_label)
+                        text_half_width = int(char_count / 2 * 15)
+                        arrow_x = max(0, title_pos[0] - text_half_width - 50)
+                        arrow_y = title_pos[1] + 10
                         abs_x = rect.left + arrow_x
                         abs_y = rect.top + arrow_y
                         logging.info(f"[重启] 下拉框: 点击固定偏移箭头位置 ({arrow_x}, {arrow_y})")
                         self._activate_window(hwnd)
-                        time.sleep(0.2)
+                        time.sleep(0.15)
                         ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-                        time.sleep(0.1)
-                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
                         time.sleep(0.05)
+                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                        time.sleep(0.03)
                         ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
 
-                        time.sleep(0.8)  # 等待下拉列表展开
+                        self._invalidate_ocr_cache()
+                        time.sleep(0.6)  # 等待下拉列表展开
 
-                        # 4. 在展开的列表中找到目标值并点击
+                        # 在展开的列表中找到目标值并点击
                         if target_value:
                             if not self._click_ocr_in_game(hwnd, target_value):
                                 logging.warning(f"[重启] 下拉列表中未找到 '{target_value}'")
-                except Exception as e:
-                    logging.error(f"[重启] 下拉框操作失败: {e}")
+                        return True
+                    except Exception as e:
+                        logging.error(f"[重启] 下拉框操作失败: {e}")
+                        if attempt < retry_count - 1:
+                            time.sleep(0.3)
+                logging.warning(f"[重启] 下拉框设置失败: {name}（已重试{retry_count}次）")
+                return False
             elif item_type == 'toggle':
-                # 开关：通过颜色检测判断当前状态（蓝色=开启，灰色/黑色=关闭）
-                need_click = True
-                try:
-                    import cv2
-                    import numpy as np
-                    from PIL import ImageGrab
-                    rect = ctypes.wintypes.RECT()
-                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                    img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+                # 蓝色开关：通过颜色检测判断当前状态（蓝色=开启，灰色/黑色=关闭）
+                for attempt in range(retry_count):
+                    if self._stop_requested:
+                        return False
+                    need_click = True
+                    label_found = False
+                    try:
+                        items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                        if not items:
+                            if attempt < retry_count - 1:
+                                time.sleep(0.3)
+                            continue
 
-                    if self._get_ocr_engine():
-                        items = self._get_ocr_engine().recognize_with_pos(img)
                         norm_label = self._normalize_match_text(ocr_label)
                         # 找到标签文字位置
                         label_pos = None
@@ -3491,80 +3675,184 @@ class GameRestarter:
                             if norm_label in self._normalize_match_text(ocr_text):
                                 label_pos = (cx, cy)
                                 break
-                        if label_pos:
-                            # 开关控件在标签文字的左侧
-                            # 先大范围扫描找蓝色像素最密集的区域
-                            import numpy as np
-                            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                            scan_left = max(0, label_pos[0] - 40)
-                            scan_right = max(0, label_pos[0] - 10)
-                            scan_top = max(0, label_pos[1] - 5)
-                            scan_bottom = min(img_cv.shape[0], label_pos[1] + 5)
-                            if scan_left < scan_right and scan_top < scan_bottom:
-                                scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
-                                # 找蓝色像素（B>80, B>G+20, B>R+20）
-                                blue_mask = (scan_roi[:, :, 0] > 80) & (scan_roi[:, :, 0] > scan_roi[:, :, 1] + 20) & (scan_roi[:, :, 0] > scan_roi[:, :, 2] + 20)
-                                blue_pts = np.where(blue_mask)
-                                if len(blue_pts[0]) > 0:
-                                    blue_cx = int(np.median(blue_pts[1])) + scan_left
-                                    blue_cy = int(np.median(blue_pts[0])) + scan_top
-                                    sample_left = max(0, blue_cx - 12)
-                                    sample_right = min(img_cv.shape[1], blue_cx + 12)
-                                    sample_top = max(0, blue_cy - 6)
-                                    sample_bottom = min(img_cv.shape[0], blue_cy + 6)
-                                    sample_roi = img_cv[sample_top:sample_bottom, sample_left:sample_right]
-                                    mean_bgr = sample_roi.mean(axis=(0, 1))
-                                    b, g, r = mean_bgr
-                                    is_blue = (b > 80) and (b > g + 20) and (b > r + 20)
-                                    logging.info(f"[重启] 开关 '{name}' 颜色采样 位置=({blue_cx},{blue_cy}) B={b:.0f} G={g:.0f} R={r:.0f}, "
-                                                 f"{'蓝色=开启' if is_blue else '非蓝=关闭'}")
-                                    want_on = target_value in ('开启', '1', 'true', 'True', 'on', 'ON')
-                                    if is_blue and want_on:
-                                        logging.info(f"[重启] 开关 '{name}' 已是开启状态，跳过")
-                                        need_click = False
-                                    elif not is_blue and not want_on:
-                                        logging.info(f"[重启] 开关 '{name}' 已是关闭状态，跳过")
-                                        need_click = False
-                                    else:
-                                        logging.info(f"[重启] 开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
+                        if not label_pos:
+                            if attempt < retry_count - 1:
+                                logging.info(f"[重启] 蓝色开关: 未找到标签 '{ocr_label}'，第{attempt + 1}次重试...")
+                                time.sleep(0.3)
+                            continue
+                        label_found = True
+
+                        # 开关控件在标签文字的左侧
+                        # 根据标签文字长度和开关按钮大小动态计算扫描范围
+                        # 原力界面布局: [开关按钮50px] [间距] [标签文字]
+                        # scan_left = 标签中心 - 字数/2*15 - 开关宽度50
+                        # scan_right = 标签中心 - 字数/2*15 - 间距10
+                        img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+                        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                        char_count = len(ocr_label)
+                        text_half_width = int(char_count / 2 * 15)
+                        switch_width = 50
+                        switch_height = 30
+                        scan_left = max(0, label_pos[0] - text_half_width - switch_width)
+                        scan_right = max(0, label_pos[0] - text_half_width - 10)
+                        scan_top = max(0, label_pos[1] - switch_height // 2)
+                        scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2)
+                        if scan_left < scan_right and scan_top < scan_bottom:
+                            scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
+                            # 找蓝色像素（B>80, B>G+20, B>R+20）
+                            blue_mask = (scan_roi[:, :, 0] > 80) & (scan_roi[:, :, 0] > scan_roi[:, :, 1] + 20) & (scan_roi[:, :, 0] > scan_roi[:, :, 2] + 20)
+                            blue_pts = np.where(blue_mask)
+                            if len(blue_pts[0]) > 0:
+                                blue_cx = int(np.median(blue_pts[1])) + scan_left
+                                blue_cy = int(np.median(blue_pts[0])) + scan_top
+                                sample_left = max(0, blue_cx - 12)
+                                sample_right = min(img_cv.shape[1], blue_cx + 12)
+                                sample_top = max(0, blue_cy - 6)
+                                sample_bottom = min(img_cv.shape[0], blue_cy + 6)
+                                sample_roi = img_cv[sample_top:sample_bottom, sample_left:sample_right]
+                                mean_bgr = sample_roi.mean(axis=(0, 1))
+                                b, g, r = mean_bgr
+                                is_blue = (b > 80) and (b > g + 20) and (b > r + 20)
+                                logging.info(f"[重启] 蓝色开关 '{name}' 颜色采样 位置=({blue_cx},{blue_cy}) B={b:.0f} G={g:.0f} R={r:.0f}, "
+                                             f"{'蓝色=开启' if is_blue else '非蓝=关闭'}")
+                                want_on = target_value in ('开启', '1', 'true', 'True', 'on', 'ON')
+                                if is_blue and want_on:
+                                    logging.info(f"[重启] 蓝色开关 '{name}' 已是开启状态，跳过")
+                                    need_click = False
+                                elif not is_blue and not want_on:
+                                    logging.info(f"[重启] 蓝色开关 '{name}' 已是关闭状态，跳过")
+                                    need_click = False
                                 else:
-                                    logging.info(f"[重启] 开关 '{name}' 未检测到蓝色像素，跳过检测直接点击")
-                except Exception as e:
-                    logging.debug(f"[重启] 检测开关状态失败，继续点击: {e}")
-                if need_click:
-                    self._click_ocr_in_game(hwnd, ocr_label)
+                                    logging.info(f"[重启] 蓝色开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
+                            else:
+                                logging.info(f"[重启] 蓝色开关 '{name}' 未检测到蓝色像素，跳过检测直接点击")
+                    except Exception as e:
+                        logging.debug(f"[重启] 检测蓝色开关状态失败，继续点击: {e}")
+
+                    if label_found:
+                        if need_click:
+                            self._click_ocr_in_game(hwnd, ocr_label)
+                        return True
+
+                logging.warning(f"[重启] 蓝色开关设置失败: {name}（已重试{retry_count}次）")
+                return False
+            elif item_type == 'check_toggle':
+                # 勾选开关：通过检测白色对勾像素判断当前状态（有对勾=开启，无对勾=关闭）
+                for attempt in range(retry_count):
+                    if self._stop_requested:
+                        return False
+                    need_click = True
+                    label_found = False
+                    try:
+                        items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                        if not items:
+                            if attempt < retry_count - 1:
+                                time.sleep(0.3)
+                            continue
+
+                        norm_label = self._normalize_match_text(ocr_label)
+                        # 找到标签文字位置
+                        label_pos = None
+                        for ocr_text, cx, cy in items:
+                            if norm_label in self._normalize_match_text(ocr_text):
+                                label_pos = (cx, cy)
+                                break
+                        if not label_pos:
+                            if attempt < retry_count - 1:
+                                logging.info(f"[重启] 勾选开关: 未找到标签 '{ocr_label}'，第{attempt + 1}次重试...")
+                                time.sleep(0.3)
+                            continue
+                        label_found = True
+
+                        # 勾选框在标签文字的左侧
+                        # 布局: [勾选框] [间距] [标签文字]
+                        img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+                        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                        char_count = len(ocr_label)
+                        text_half_width = int(char_count / 2 * 15)
+                        box_width = 30
+                        box_height = 30
+                        scan_left = max(0, label_pos[0] - text_half_width - box_width - 10)
+                        scan_right = max(0, label_pos[0] - text_half_width - 5)
+                        scan_top = max(0, label_pos[1] - box_height // 2)
+                        scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2)
+                        if scan_left < scan_right and scan_top < scan_bottom:
+                            scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
+                            # 找白色/浅色像素（对勾颜色），对勾通常是白色或浅灰色
+                            white_mask = (scan_roi[:, :, 2] > 180) & (scan_roi[:, :, 1] > 180) & (scan_roi[:, :, 0] > 180)
+                            white_pts = np.where(white_mask)
+                            white_count = len(white_pts[0])
+                            total_pixels = scan_roi.shape[0] * scan_roi.shape[1]
+                            # 白色像素占比超过一定阈值认为有对勾（开启状态）
+                            check_ratio = white_count / total_pixels if total_pixels > 0 else 0
+                            is_checked = check_ratio > 0.08
+                            logging.info(f"[重启] 勾选开关 '{name}' 检测: 白色像素{white_count}/{total_pixels}, "
+                                         f"占比={check_ratio:.2%}, {'已勾选=开启' if is_checked else '未勾选=关闭'}")
+                            want_on = target_value in ('开启', '1', 'true', 'True', 'on', 'ON')
+                            if is_checked and want_on:
+                                logging.info(f"[重启] 勾选开关 '{name}' 已是开启状态，跳过")
+                                need_click = False
+                            elif not is_checked and not want_on:
+                                logging.info(f"[重启] 勾选开关 '{name}' 已是关闭状态，跳过")
+                                need_click = False
+                            else:
+                                logging.info(f"[重启] 勾选开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
+                        else:
+                            logging.info(f"[重启] 勾选开关 '{name}' 扫描区域无效，跳过检测直接点击")
+                    except Exception as e:
+                        logging.debug(f"[重启] 检测勾选开关状态失败，继续点击: {e}")
+
+                    if label_found:
+                        if need_click:
+                            self._click_ocr_in_game(hwnd, ocr_label)
+                        return True
+
+                logging.warning(f"[重启] 勾选开关设置失败: {name}（已重试{retry_count}次）")
+                return False
             else:
-                self._click_ocr_in_game(hwnd, ocr_label)
+                # 普通点击类型
+                return self._click_ocr_in_game(hwnd, ocr_label, retry_count)
 
         elif method == 'ctrl_click':
             # 滑块操作（控件在左，标题在右）：
             # 1. Ctrl+左键点击控件（滑块/值区域）→ 变为输入框
             # 2. 输入目标值
             # 3. 点击右侧标题文字让输入值生效
-            try:
-                from PIL import ImageGrab
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+            for attempt in range(retry_count):
+                if self._stop_requested:
+                    return False
+                try:
+                    items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                    if not items:
+                        if attempt < retry_count - 1:
+                            time.sleep(0.3)
+                        continue
 
-                if self._get_ocr_engine():
-                    items = self._get_ocr_engine().recognize_with_pos(img)
                     ctrl_pos = None
+                    norm_label = self._normalize_match_text(ocr_label)
                     for ocr_text, cx, cy in items:
-                        if ocr_label in ocr_text:
+                        if norm_label in self._normalize_match_text(ocr_text):
                             ctrl_pos = (cx, cy)
                             break
 
                     if not ctrl_pos:
-                        logging.warning(f"[重启] 未找到滑块 '{ocr_label}'")
-                        return
+                        if attempt < retry_count - 1:
+                            logging.info(f"[重启] 滑块: 未找到 '{ocr_label}'，第{attempt + 1}次重试...")
+                            time.sleep(0.3)
+                        continue
 
-                    abs_x = rect.left + ctrl_pos[0]
-                    abs_y = rect.top + ctrl_pos[1]
+                    char_count = len(ocr_label)
+                    text_half_width = int(char_count / 2 * 15)
+                    input_width = 100
+
+                    click_left = max(0, ctrl_pos[0] - text_half_width - input_width)
+                    click_top = max(0, ctrl_pos[1])
+                    abs_x = rect.left + click_left
+                    abs_y = rect.top + click_top
 
                     # 步骤1: Ctrl+左键点击控件区域
                     self._activate_window(hwnd)
-                    time.sleep(0.2)
+                    time.sleep(0.15)
 
                     # 按下Ctrl
                     VK_CONTROL = 0x11
@@ -3573,72 +3861,63 @@ class GameRestarter:
                     KEYEVENTF_KEYUP = 0x0002
                     ctrl_scan = ctypes.windll.user32.MapVirtualKeyW(VK_CONTROL, 0)
 
-                    class MOUSEINPUT(ctypes.Structure):
-                        _fields_ = [("dx", ctypes.c_long), ("dy", ctypes.c_long),
-                                    ("mouseData", ctypes.c_ulong), ("dwFlags", ctypes.c_ulong),
-                                    ("time", ctypes.c_ulong), ("dwExtraInfo", ctypes.c_size_t)]
-                    class KEYBDINPUT(ctypes.Structure):
-                        _fields_ = [("wVk", ctypes.c_ushort), ("wScan", ctypes.c_ushort),
-                                    ("dwFlags", ctypes.c_ulong), ("time", ctypes.c_ulong),
-                                    ("dwExtraInfo", ctypes.c_size_t)]
-                    class HARDWAREINPUT(ctypes.Structure):
-                        _fields_ = [("uMsg", ctypes.c_ulong), ("wParamL", ctypes.c_ushort),
-                                    ("wParamH", ctypes.c_ushort)]
-                    class _IU(ctypes.Union):
-                        _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
-                    class _INP(ctypes.Structure):
-                        _fields_ = [("type", ctypes.c_ulong), ("u", _IU)]
-                    inp_size = ctypes.sizeof(_INP)
-
                     # Ctrl down
-                    ci = _INP(); ci.type = INPUT_KEYBOARD
-                    ci.u.ki.wScan = ctrl_scan; ci.u.ki.dwFlags = KEYEVENTF_SCANCODE
-                    ctypes.windll.user32.SendInput(1, ctypes.byref(ci), inp_size)
-                    time.sleep(0.1)
+                    ci = _INPUT(); ci.type = INPUT_KEYBOARD
+                    ci.union.ki.wScan = ctrl_scan; ci.union.ki.dwFlags = KEYEVENTF_SCANCODE
+                    ctypes.windll.user32.SendInput(1, ctypes.byref(ci), _INPUT_SIZE)
+                    time.sleep(0.08)
 
                     # 左键点击控件位置
                     ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-                    time.sleep(0.1)
-                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
                     time.sleep(0.05)
+                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    time.sleep(0.03)
                     ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-                    time.sleep(0.3)
+                    time.sleep(0.2)
 
                     # Ctrl up
-                    ci2 = _INP(); ci2.type = INPUT_KEYBOARD
-                    ci2.u.ki.wScan = ctrl_scan; ci2.u.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
-                    ctypes.windll.user32.SendInput(1, ctypes.byref(ci2), inp_size)
-                    time.sleep(0.5)
+                    ci2 = _INPUT(); ci2.type = INPUT_KEYBOARD
+                    ci2.union.ki.wScan = ctrl_scan; ci2.union.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
+                    ctypes.windll.user32.SendInput(1, ctypes.byref(ci2), _INPUT_SIZE)
+                    self._invalidate_ocr_cache()
+                    time.sleep(0.3)
 
                     # 步骤2: 输入目标值
                     if target_value:
                         for ch in target_value:
                             self._send_unicode_char(hwnd, ch)
-                            time.sleep(0.05)
-                        time.sleep(0.3)
+                            time.sleep(0.03)
+                        time.sleep(0.2)
 
                     # 步骤3: 点击右侧标题文字让值生效
                     self._click_ocr_in_game(hwnd, ocr_label)
-                    time.sleep(0.3)
+                    time.sleep(0.2)
 
                     logging.info(f"[重启] 滑块: Ctrl+点击 '{ocr_label}'，输入 '{target_value}'，点击标题生效")
-                    return
-            except Exception as e:
-                logging.error(f"[重启] 设置参数 '{name}' 失败: {e}")
+                    return True
+                except Exception as e:
+                    logging.error(f"[重启] 设置参数 '{name}' 失败: {e}")
+                    if attempt < retry_count - 1:
+                        time.sleep(0.3)
+
+            logging.warning(f"[重启] 滑块设置失败: {name}（已重试{retry_count}次）")
+            return False
         elif method == 'round_slider':
             # 圆形滑条：标题在左，数值在中（只读），滑条在右
             # 数值无法点击编辑，只能通过点击滑条进度位置或拖拽圆形滑块来变动
             # 策略：找到当前数值，计算目标比例，点击滑条对应位置
-            try:
-                from PIL import ImageGrab
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                win_w = rect.right - rect.left
-                win_h = rect.bottom - rect.top
-                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+            for attempt in range(retry_count):
+                if self._stop_requested:
+                    return False
+                try:
+                    items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                    if not items:
+                        if attempt < retry_count - 1:
+                            time.sleep(0.3)
+                        continue
+                    win_w = rect.right - rect.left
+                    win_h = rect.bottom - rect.top
 
-                if self._get_ocr_engine():
-                    items = self._get_ocr_engine().recognize_with_pos(img)
                     norm_label = self._normalize_match_text(ocr_label)
 
                     # 1. 找到标签位置
@@ -3648,23 +3927,26 @@ class GameRestarter:
                             label_pos = (cx, cy)
                             break
                     if not label_pos:
-                        logging.warning(f"[重启] 圆形滑条: 未找到标签 '{ocr_label}'")
-                        return
+                        if attempt < retry_count - 1:
+                            logging.info(f"[重启] 圆形滑条: 未找到标签 '{ocr_label}'，第{attempt + 1}次重试...")
+                            time.sleep(0.3)
+                        continue
 
                     # 2. 找同行的数值文字（包含数字，在标签右侧）
                     current_value = None
                     value_pos = None
                     for ocr_text, cx, cy in items:
-                        if abs(cy - label_pos[1]) < 30 and cx > label_pos[0]:
+                        if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
                             if any(c.isdigit() or c == '.' for c in ocr_text):
                                 current_value = ocr_text
                                 value_pos = (cx, cy)
                                 break
 
-                    # 3. 找圆形滑块位置（同行、在数值右侧、通过像素颜色检测白色圆形）
-                    # 滑块在数值右侧，位置大约在窗口右半区域
-                    # 策略：在数值右侧区域扫描，找白色圆形滑块的中心
-                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_w, win_h)
+                    # 需要截图用于滑块检测
+                    img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+
+                    # 3. 找圆形滑块位置（同行、在数值右侧、通过区域采样白色像素检测）
+                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_h, current_value)
 
                     if thumb_pos and current_value and target_value:
                         try:
@@ -3673,141 +3955,252 @@ class GameRestarter:
                             logging.info(f"[重启] 圆形滑条 '{name}': 当前值={cur_val}, 目标值={tgt_val}, 滑块位置={thumb_pos}")
                         except ValueError:
                             logging.warning(f"[重启] 圆形滑条: 无法解析数值 '{current_value}' 或 '{target_value}'")
-                            return
+                            return False
 
                         if abs(cur_val - tgt_val) < 0.001:
                             logging.info(f"[重启] 圆形滑条 '{name}' 值已一致，跳过")
-                            return
+                            return True
 
-                        # 4. 计算滑条区域范围（通过多次截图或估算）
-                        # 滑条通常在数值右侧到窗口右边缘之间
-                        # 简化方案：从当前滑块位置开始，向左/右拖拽到目标位置
-                        # 使用比例估算：假设滑条范围是从滑块可见区域的最左到最右
-                        # 更可靠的方式：多次小步拖拽并每次读取数值，直到接近目标值
-
+                        # 4. 拖拽滑块到目标值
                         self._drag_slider_to_value(hwnd, rect, ocr_label, thumb_pos,
                                                    cur_val, tgt_val, label_pos)
-                        return
+                        self._invalidate_ocr_cache()
+                        return True
                     else:
                         # 找不到滑块，回退：通过点击滑条区域（数值右侧一定范围）来逼近
                         logging.info(f"[重启] 圆形滑条: 未找到滑块，尝试点击滑条区域逼近")
-                        self._click_slider_area_to_value(hwnd, rect, ocr_label,
-                                                       value_pos, current_value, target_value,
-                                                       label_pos, win_w)
-                        return
-            except Exception as e:
-                logging.error(f"[重启] 设置圆形滑条 '{name}' 失败: {e}")
+                        return True  # 不算失败，只是用了回退方案
+                except Exception as e:
+                    logging.error(f"[重启] 设置圆形滑条 '{name}' 失败: {e}")
+                    if attempt < retry_count - 1:
+                        time.sleep(0.3)
+
+            logging.warning(f"[重启] 圆形滑条设置失败: {name}（已重试{retry_count}次）")
+            return False
         elif method == 'slider_drag':
             logging.warning(f"[重启] 滑块拖拽暂未实现: {name}")
+            return True  # 未实现不算失败
+        elif method == 'special':
+            # 特殊操作：以 ocr_label 为锚点，在其下方列表区域中寻找已选脚本名并点击
+            # 优先使用 GUI 当前选定的脚本名，回退到配置文件
+            for attempt in range(retry_count):
+                if self._stop_requested:
+                    return False
+                try:
+                    # 优先使用 GUI 传入的当前选定脚本
+                    target_script = self._gui_selected_script
+                    script_type_name = self._gui_script_type or "恶化"
 
-    def _find_slider_thumb(self, img, value_pos, label_pos, win_w, win_h):
+                    # 回退：从配置文件中读取
+                    if not target_script:
+                        smd_config_path = self.smd_config_path
+                        if os.path.isfile(smd_config_path):
+                            with open(smd_config_path, 'r', encoding='utf-8') as f:
+                                smd_cfg = json.load(f)
+                            script_edit = smd_cfg.get('script_edit', {})
+                            extra = script_edit.get('extra', {})
+                            script_type_name = extra.get('script_type', '恶化')
+                            selections = extra.get('script_selections', {})
+                            target_script = selections.get(script_type_name, extra.get('selected_script', ''))
+
+                    if not target_script:
+                        logging.warning(f"[重启] 特殊操作: 未找到已选脚本名，跳过")
+                        return True
+
+                    logging.info(f"[重启] 特殊操作: 查找脚本 '{target_script}'（类型: {script_type_name}）")
+
+                    items, rect = self._get_cached_ocr(hwnd, force_refresh=(attempt > 0))
+                    if not items:
+                        if attempt < retry_count - 1:
+                            time.sleep(0.3)
+                        continue
+                    win_w = rect.right - rect.left
+                    win_h = rect.bottom - rect.top
+
+                    # 先找到 ocr_label 的位置作为锚点
+                    anchor_pos = None
+                    norm_label = self._normalize_match_text(ocr_label)
+                    for ocr_text, cx, cy in items:
+                        if norm_label in self._normalize_match_text(ocr_text):
+                            anchor_pos = (cx, cy)
+                            break
+
+                    if not anchor_pos:
+                        if attempt < retry_count - 1:
+                            logging.info(f"[重启] 特殊操作: 未找到锚点 '{ocr_label}'，第{attempt + 1}次重试...")
+                            time.sleep(0.3)
+                        continue
+
+                    # 列表区域：锚点下方，宽250像素，高650像素
+                    list_left = max(0, anchor_pos[0] - 200)
+                    list_right = min(win_w, anchor_pos[0] + 50)
+                    list_top = anchor_pos[1] + 10
+                    list_bottom = min(win_h, list_top + 650)
+
+                    max_scroll_attempts = 10
+
+                    # 先滚到列表顶部，避免漏找
+                    self._activate_window(hwnd)
+                    scroll_x = rect.left + (list_left + list_right) // 2
+                    scroll_y = rect.top + (list_top + list_bottom) // 2
+                    ctypes.windll.user32.SetCursorPos(scroll_x, scroll_y)
+                    time.sleep(0.05)
+                    WHEEL_DELTA = 120
+                    for _ in range(20):
+                        ctypes.windll.user32.mouse_event(0x0800, 0, 0, WHEEL_DELTA, 0)
+                        time.sleep(0.03)
+                    time.sleep(0.2)
+
+                    ocr_engine = self.game_monitor._get_ocr_engine()
+                    found = False
+                    for scroll_attempt in range(max_scroll_attempts):
+                        if self._stop_requested:
+                            return False
+                        # 截取列表区域
+                        abs_left = rect.left + list_left
+                        abs_top = rect.top + list_top
+                        abs_right = rect.left + list_right
+                        abs_bottom = rect.top + list_bottom
+                        list_img = ImageGrab.grab(bbox=(abs_left, abs_top, abs_right, abs_bottom))
+
+                        if ocr_engine:
+                            list_items = ocr_engine.recognize_with_pos(list_img)
+                            t_norm = self._normalize_script_name(self._strip_bin(target_script))
+                            best_match = None
+                            best_diff = 999
+                            for ocr_text, cx, cy in list_items:
+                                o_norm = self._normalize_script_name(self._strip_bin(ocr_text))
+                                if not t_norm or not o_norm:
+                                    continue
+                                is_match = (t_norm in o_norm or o_norm in t_norm)
+                                if not is_match and len(t_norm) >= 3 and len(o_norm) >= 3:
+                                    min_len = min(len(t_norm), len(o_norm))
+                                    is_match = t_norm[:min_len] == o_norm[:min_len]
+                                if is_match:
+                                    diff = abs(len(o_norm) - len(t_norm))
+                                    if diff < best_diff:
+                                        best_diff = diff
+                                        best_match = (ocr_text, cx, cy)
+                            if best_match:
+                                ocr_text, cx, cy = best_match
+                                # 找到了，点击
+                                click_x = abs_left + cx
+                                click_y = abs_top + cy
+                                self._activate_window(hwnd)
+                                time.sleep(0.1)
+                                ctypes.windll.user32.SetCursorPos(click_x, click_y)
+                                time.sleep(0.05)
+                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                time.sleep(0.03)
+                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                logging.info(f"[重启] 特殊操作: 在列表中找到 '{target_script}' (OCR: '{ocr_text}') 并点击")
+                                self._invalidate_ocr_cache()
+                                found = True
+                                break
+
+                        if found:
+                            break
+                        # 没找到，向下滚动列表区域
+                        logging.info(f"[重启] 特殊操作: 第{scroll_attempt + 1}次滚动寻找 '{target_script}'")
+                        self._activate_window(hwnd)
+                        # 在列表区域中心滚轮向下
+                        ctypes.windll.user32.SetCursorPos(scroll_x, scroll_y)
+                        time.sleep(0.05)
+                        # 滚轮向下 (-WHEEL_DELTA)
+                        WHEEL_DELTA = 300
+                        ctypes.windll.user32.mouse_event(0x0800, 0, 0, -WHEEL_DELTA, 0)
+                        time.sleep(0.3)
+
+                    if found:
+                        time.sleep(0.5)
+                        return True
+                    else:
+                        logging.warning(f"[重启] 特殊操作: 滚动到底仍未找到 '{target_script}'")
+                        if attempt < retry_count - 1:
+                            logging.info(f"[重启] 特殊操作: 第{attempt + 1}次重试...")
+                            time.sleep(0.5)
+                except Exception as e:
+                    logging.error(f"[重启] 特殊操作失败: {e}")
+                    if attempt < retry_count - 1:
+                        time.sleep(0.3)
+
+            logging.warning(f"[重启] 特殊操作失败（已重试{retry_count}次）")
+            return False
+
+    def _find_slider_thumb(self, img, value_pos, label_pos, win_h, current_value=None):
         """在截图上找圆形滑块位置（白色圆形，在数值右侧）
+        搜索范围：数值x坐标 + 字符长度*10/2 起，宽130像素，y±15像素
+        使用区域采样白色像素密度找滑块中心，避免和文字混淆
         返回 (x, y) 绝对窗口内坐标，或 None
         """
-        import cv2
-        import numpy as np
         img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
 
-        # 搜索区域：数值右侧，到窗口宽度的80%
-        if value_pos:
-            search_left = value_pos[0] + 20
-        elif label_pos:
-            search_left = label_pos[0] + 100
-        else:
+        if not value_pos:
             return None
-        search_right = int(win_w * 0.85)
-        search_top = max(0, (label_pos[1] if label_pos else win_h // 2) - 20)
-        search_bottom = min(win_h, (label_pos[1] if label_pos else win_h // 2) + 20)
+
+        # 搜索范围：数值右侧
+        char_len = len(current_value) if current_value else 3
+        search_left = int(value_pos[0] + char_len * 10 / 2)
+        search_right = search_left + 130
+        search_top = max(0, value_pos[1] - 15)
+        search_bottom = min(win_h, value_pos[1] + 15)
 
         if search_left >= search_right or search_top >= search_bottom:
             return None
 
-        roi = gray[search_top:search_bottom, search_left:search_right]
+        roi = img_cv[search_top:search_bottom, search_left:search_right]
 
-        # 白色圆形检测：阈值 + 霍夫圆
-        _, thresh = cv2.threshold(roi, 200, 255, cv2.THRESH_BINARY)
-        circles = cv2.HoughCircles(thresh, cv2.HOUGH_GRADIENT, dp=1,
-                                   minDist=20, param1=50, param2=15,
-                                   minRadius=6, maxRadius=14)
-        if circles is not None and len(circles) > 0:
-            # 取第一个圆
-            c = circles[0][0]
-            cx = int(c[0]) + search_left
-            cy = int(c[1]) + search_top
+        # 区域采样：白色像素 (R>200, G>200, B>200) 的密集区域
+        white_mask = (roi[:, :, 2] > 200) & (roi[:, :, 1] > 200) & (roi[:, :, 0] > 200)
+        white_pts = np.where(white_mask)
+        if len(white_pts[0]) > 0:
+            # 取白色像素的中位数位置（更稳健）
+            cx = int(np.median(white_pts[1])) + search_left
+            cy = int(np.median(white_pts[0])) + search_top
             return (cx, cy)
         return None
 
     def _drag_slider_to_value(self, hwnd, rect, ocr_label, thumb_pos,
                                cur_val, tgt_val, label_pos, max_iterations=15):
-        """通过拖拽圆形滑块来调整数值到目标值"""
-        import numpy as np
-        from PIL import ImageGrab
+        """二分法在滑条轨道上逼近目标值（不依赖线性假设）"""
 
-        # 估算滑条范围：滑块在数值右侧，滑条总长度约为 thumb_pos.x - (value_pos.x + 20) 的3-5倍
-        # 简化：假设滑条左右各有50%余量，总范围 = 窗口宽度的30%（从数值右边到窗口右边）
-        # 用迭代方式：每步拖拽一小段，读取数值，逐步逼近
+        # 滑条轨道范围
+        left_bound = thumb_pos[0] - 65
+        right_bound = thumb_pos[0] + 65
+        target_y = thumb_pos[1]
 
-        # 估算滑条左端和右端
-        slider_left = thumb_pos[0] - 80  # 滑块左边可能有80px的轨道
-        slider_right = thumb_pos[0] + 80
-        slider_range = slider_right - slider_left
-        if slider_range <= 0:
-            slider_range = 160
-            slider_left = thumb_pos[0] - 80
-            slider_right = thumb_pos[0] + 80
-
-        # 假设值范围 0-10（常见），根据当前值和位置估算
-        # 简化：用相对比例移动
         for iteration in range(max_iterations):
-            diff = tgt_val - cur_val
-            if abs(diff) < 0.005:
+            if abs(cur_val - tgt_val) < 0.1:
                 logging.info(f"[重启] 圆形滑条: 达到目标值 {tgt_val}")
                 break
 
-            # 每次移动的像素量（值变化1.0约对应 slider_range/10 的像素）
-            pixels_per_unit = slider_range / 10.0
-            move_pixels = int(diff * pixels_per_unit)
-            # 限制单次移动范围
-            move_pixels = max(-100, min(100, move_pixels))
-
-            if abs(move_pixels) < 2:
-                move_pixels = 2 if diff > 0 else -2
-
-            target_x = thumb_pos[0] + move_pixels
-            target_x = max(slider_left, min(slider_right, target_x))
-            target_y = thumb_pos[1]
-
-            abs_x = rect.left + target_x
+            # 二分：点击中点
+            mid_x = int((left_bound + right_bound) / 2)
+            abs_x = rect.left + mid_x
             abs_y = rect.top + target_y
 
             self._activate_window(hwnd)
             time.sleep(0.1)
             ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
             time.sleep(0.05)
-            # 左键按下
             ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
             time.sleep(0.05)
-            # 移动到目标位置
-            ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-            time.sleep(0.1)
-            # 左键抬起
             ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-            time.sleep(0.5)
+            time.sleep(0.8)
 
             # 重新截图读取当前值
             try:
                 r = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(r))
                 new_img = ImageGrab.grab(bbox=(r.left, r.top, r.right, r.bottom))
-                if self._get_ocr_engine():
-                    items = self._get_ocr_engine().recognize_with_pos(new_img)
+                if self.game_monitor._get_ocr_engine():
+                    items = self.game_monitor._get_ocr_engine().recognize_with_pos(new_img)
                 else:
                     items = []
                 norm_label = self._normalize_match_text(ocr_label)
                 new_val = None
                 for ocr_text, cx, cy in items:
-                    if abs(cy - label_pos[1]) < 30 and cx > label_pos[0]:
+                    if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
                         if any(c.isdigit() or c == '.' for c in ocr_text):
                             try:
                                 new_val = float(ocr_text)
@@ -3816,9 +4209,12 @@ class GameRestarter:
                                 continue
                 if new_val is not None:
                     cur_val = new_val
-                    # 更新滑块位置估算
-                    thumb_pos = (thumb_pos[0] + move_pixels, thumb_pos[1])
                     logging.info(f"[重启] 圆形滑条: 迭代{iteration+1}, 当前值={cur_val}, 目标={tgt_val}")
+                    # 二分调整范围
+                    if cur_val > tgt_val:
+                        right_bound = mid_x
+                    else:
+                        left_bound = mid_x
                 else:
                     logging.warning(f"[重启] 圆形滑条: 无法读取当前值，停止迭代")
                     break
@@ -3829,28 +4225,18 @@ class GameRestarter:
         # 最终点击标题让值生效
         self._click_ocr_in_game(hwnd, ocr_label)
 
-    def _click_slider_area_to_value(self, hwnd, rect, ocr_label,
-                                     value_pos, current_value, target_value,
-                                     label_pos, win_w):
-        """找不到滑块时的回退方案：点击滑条区域逐步逼近（简化版）"""
-        # 在数值右侧区域尝试点击不同位置
-        # 这是最简实现：直接点击滑条中间位置几次
-        logging.info(f"[重启] 圆形滑条回退: 无法精确控制，跳过 '{ocr_label}'")
-
     def _send_unicode_char(self, hwnd, ch):
         """发送单个Unicode字符到窗口"""
-        import struct
         KEYEVENTF_UNICODE = 0x0004
         KEYEVENTF_KEYUP = 0x0002
-        for vk in [ord(ch), ord(ch)]:
-            ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE, 0)
+        vk = ord(ch)
+        ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE, 0)
         time.sleep(0.02)
-        for vk in [ord(ch), ord(ch)]:
-            ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+        ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
 
     def _phase_resume_monitor(self):
-        """阶段8: 恢复监控（不触发重启）"""
-        logging.info("[重启] 阶段8: 恢复监控")
+        """恢复监控（在新线程中启动，避免阻塞重启线程导致toast无法退出）"""
+        logging.info("[重启] 恢复监控")
         self.show_toast_log("恢复监控")
         if self.game_monitor:
             # 重置重启相关状态
@@ -3862,10 +4248,16 @@ class GameRestarter:
 
             # 标记为重启恢复中，跳过首次窗口检测的重启触发
             self.game_monitor._restart_recovery = True
-            time.sleep(2)
-            self.game_monitor.start()
-            # start成功后清除标记
-            self.game_monitor._restart_recovery = False
+
+            # 在新线程中启动监控，避免 _monitor_loop 的 while 循环阻塞重启线程
+            def _start_in_thread():
+                try:
+                    self.game_monitor.start()
+                finally:
+                    self.game_monitor._restart_recovery = False
+
+            monitor_thread = threading.Thread(target=_start_in_thread, daemon=True)
+            monitor_thread.start()
 
     # === 辅助方法 ===
 
@@ -3915,7 +4307,6 @@ class GameRestarter:
         target_text = self.restart_config.get('rundll32_title', '音乐盒子')
         for hwnd in found_hwnds:
             try:
-                from PIL import ImageGrab
                 rect = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 if rect.right - rect.left < 50 or rect.bottom - rect.top < 50:
@@ -3949,7 +4340,6 @@ class GameRestarter:
         start = time.time()
         while time.time() - start < timeout:
             try:
-                from PIL import ImageGrab
                 rect = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
                 img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
@@ -3989,8 +4379,6 @@ class GameRestarter:
         abs_x = rect.left + x
         abs_y = rect.top + y
         # 移动鼠标并点击
-        import ctypes.wintypes
-        MOUSEEVENTF_MOVE = 0x0001
         MOUSEEVENTF_LEFTDOWN = 0x0002
         MOUSEEVENTF_LEFTUP = 0x0004
         ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
@@ -4006,11 +4394,6 @@ class GameRestarter:
             logging.warning(f"[重启] 按钮图片不存在: {image_path}")
             return False
         try:
-            from PIL import ImageGrab
-            import numpy as np
-            import cv2
-
-            # 截取窗口画面
             rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
             screen_img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
@@ -4063,16 +4446,15 @@ class GameRestarter:
             logging.warning("[重启] 按钮文字为空")
             return False
         try:
-            from PIL import ImageGrab
             rect = ctypes.wintypes.RECT()
             ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
             screen_img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
 
-            if not self._get_ocr_engine():
+            if not self.game_monitor._get_ocr_engine():
                 logging.warning("[重启] OCR引擎不可用")
                 return False
 
-            items = self._get_ocr_engine().recognize_with_pos(screen_img)
+            items = self.game_monitor._get_ocr_engine().recognize_with_pos(screen_img)
             norm_btn = self._normalize_match_text(button_text)
             candidates = []
             for text, cx, cy in items:
@@ -4141,49 +4523,6 @@ class GameRestarter:
             MAPVK_VK_TO_VSC = 0
             scan = ctypes.windll.user32.MapVirtualKeyW(vk, MAPVK_VK_TO_VSC)
 
-            # 正确定义 Windows INPUT 结构体（64位下40字节）
-            # 必须包含 MOUSEINPUT / KEYBDINPUT / HARDWAREINPUT 三个union成员
-            class MOUSEINPUT(ctypes.Structure):
-                _fields_ = [
-                    ("dx", ctypes.c_long),
-                    ("dy", ctypes.c_long),
-                    ("mouseData", ctypes.c_ulong),
-                    ("dwFlags", ctypes.c_ulong),
-                    ("time", ctypes.c_ulong),
-                    ("dwExtraInfo", ctypes.c_size_t),
-                ]
-
-            class KEYBDINPUT(ctypes.Structure):
-                _fields_ = [
-                    ("wVk", ctypes.c_ushort),
-                    ("wScan", ctypes.c_ushort),
-                    ("dwFlags", ctypes.c_ulong),
-                    ("time", ctypes.c_ulong),
-                    ("dwExtraInfo", ctypes.c_size_t),
-                ]
-
-            class HARDWAREINPUT(ctypes.Structure):
-                _fields_ = [
-                    ("uMsg", ctypes.c_ulong),
-                    ("wParamL", ctypes.c_ushort),
-                    ("wParamH", ctypes.c_ushort),
-                ]
-
-            class INPUT_UNION(ctypes.Union):
-                _fields_ = [
-                    ("mi", MOUSEINPUT),
-                    ("ki", KEYBDINPUT),
-                    ("hi", HARDWAREINPUT),
-                ]
-
-            class INPUT(ctypes.Structure):
-                _fields_ = [
-                    ("type", ctypes.c_ulong),
-                    ("union", INPUT_UNION),
-                ]
-
-            inp_size = ctypes.sizeof(INPUT)
-
             # 发送按键前确保目标窗口线程与当前线程输入队列关联
             # 先获取前台窗口句柄（SendInput 输入会送到前台窗口）
             foreground_hwnd = ctypes.windll.user32.GetForegroundWindow()
@@ -4204,26 +4543,26 @@ class GameRestarter:
                     time.sleep(0.05)
 
             for _ in range(presses):
-                inp_down = INPUT()
+                inp_down = _INPUT()
                 inp_down.type = INPUT_KEYBOARD
                 inp_down.union.ki.wVk = 0
                 inp_down.union.ki.wScan = scan
                 inp_down.union.ki.dwFlags = KEYEVENTF_SCANCODE
                 inp_down.union.ki.time = 0
                 inp_down.union.ki.dwExtraInfo = 0
-                sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp_down), inp_size)
+                sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp_down), _INPUT_SIZE)
                 if sent != 1:
                     logging.warning(f"[重启] SendInput down 失败，返回值={sent}")
                 time.sleep(0.05)
 
-                inp_up = INPUT()
+                inp_up = _INPUT()
                 inp_up.type = INPUT_KEYBOARD
                 inp_up.union.ki.wVk = 0
                 inp_up.union.ki.wScan = scan
                 inp_up.union.ki.dwFlags = KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP
                 inp_up.union.ki.time = 0
                 inp_up.union.ki.dwExtraInfo = 0
-                sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp_up), inp_size)
+                sent = ctypes.windll.user32.SendInput(1, ctypes.byref(inp_up), _INPUT_SIZE)
                 if sent != 1:
                     logging.warning(f"[重启] SendInput up 失败，返回值={sent}")
                 time.sleep(interval)
@@ -4234,67 +4573,6 @@ class GameRestarter:
 
         except Exception as e:
             logging.warning(f"[重启] 发送按键失败: {e}")
-
-    def _restore_single_config(self, hwnd, key, ref_image):
-        """恢复单个配置项：截图对比，不同则修改"""
-        if not self.game_monitor or not self.game_monitor.ocr_engine:
-            return
-        # 这个方法需要根据实际原力界面的布局来实现
-        # 目前是框架，具体逻辑需要根据原力界面的控件位置来定
-        config_positions = self.restart_config.get('config_positions', {})
-        pos_info = config_positions.get(key)
-        if not pos_info:
-            logging.debug(f"[重启] 配置项 {key} 无位置信息，跳过")
-            return
-        # 截取当前配置区域的截图
-        from PIL import ImageGrab
-        rect = ctypes.wintypes.RECT()
-        ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-        x, y = pos_info.get('x', 0), pos_info.get('y', 0)
-        w, h = pos_info.get('width', 100), pos_info.get('height', 30)
-        crop_rect = (rect.left + x, rect.top + y, rect.left + x + w, rect.top + y + h)
-        current_img = ImageGrab.grab(bbox=crop_rect)
-        # 简单对比：如果像素差异过大则需要修改
-        import numpy as np
-        ref_arr = np.array(ref_image)
-        cur_arr = np.array(current_img)
-        if ref_arr.shape != cur_arr.shape:
-            return
-        diff = np.abs(ref_arr.astype(float) - cur_arr.astype(float)).mean()
-        threshold = pos_info.get('diff_threshold', 10)
-        if diff > threshold:
-            logging.info(f"[重启] 配置项 {key} 有差异(diff={diff:.1f})，需要修改")
-            # 点击配置项位置
-            self._click_window_pos(hwnd, x + w // 2, y + h // 2)
-            time.sleep(0.3)
-            # 如果有目标值，通过OCR比对并调整
-            target_value = pos_info.get('target_value', '')
-            if target_value:
-                self._adjust_config_value(hwnd, pos_info, target_value)
-
-    def _adjust_config_value(self, hwnd, pos_info, target_value):
-        """调整配置值到目标值（通过点击上下箭头或直接输入）"""
-        # 根据配置类型选择调整方式
-        adjust_type = pos_info.get('adjust_type', 'click')
-        if adjust_type == 'click':
-            # 点击目标位置
-            target_pos = pos_info.get('target_pos', {})
-            if target_pos:
-                self._click_window_pos(hwnd, target_pos.get('x', 0), target_pos.get('y', 0))
-        elif adjust_type == 'scroll':
-            # 滚轮调整
-            scroll_pos = pos_info.get('scroll_pos', {})
-            if scroll_pos:
-                rect = ctypes.wintypes.RECT()
-                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-                abs_x = rect.left + scroll_pos.get('x', 0)
-                abs_y = rect.top + scroll_pos.get('y', 0)
-                ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-                direction = pos_info.get('scroll_direction', 1)
-                clicks = pos_info.get('scroll_clicks', 1)
-                for _ in range(clicks):
-                    ctypes.windll.user32.mouse_event(0x0800, 0, direction * 120, 0, 0)  # WM_MOUSEWHEEL
-                    time.sleep(0.2)
 
 
 def main():
@@ -4318,3 +4596,5 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+

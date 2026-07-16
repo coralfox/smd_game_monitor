@@ -273,10 +273,10 @@
       }
     ],
     "extra": {
-      "selected_script": "eh_LK_auto_re_t.bin",
+      "selected_script": "eh_GHDS_auto_re_t.bin",
       "script_type": "恶化",
       "script_selections": {
-        "恶化": "eh_LK_auto_re_t.bin",
+        "恶化": "eh_GHDS_auto_re_t.bin",
         "副本": "fb_KNDQG_auto.bin",
         "支线": "zx_KND.bin",
         "报复": "bf_HSD_auto_t.bin",

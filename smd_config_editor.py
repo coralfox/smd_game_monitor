@@ -6,8 +6,9 @@ SMD 配置设定参数编辑器
 
 import os
 import json
-import logging
+import time
 import tkinter as tk
+import ctypes
 from tkinter import ttk, messagebox
 
 # SMD 左侧导航的标签页列表（按顺序）
@@ -27,12 +28,14 @@ SMD_TABS = [
 
 # 类型与设置方式的中文映射
 TYPE_MAP = {
-    "toggle": "开关",
+    "toggle": "蓝色开关",
+    "check_toggle": "勾选开关",
     "slider": "滑块数值",
     "round_slider": "圆形滑条",
     "text": "文本",
     "dropdown": "下拉选项",
     "action": "按钮",
+    "special": "特殊操作",
 }
 TYPE_MAP_REVERSE = {v: k for k, v in TYPE_MAP.items()}
 
@@ -40,7 +43,8 @@ METHOD_MAP = {
     "click": "点击",
     "ctrl_click": "Ctrl+点击",
     "slider_drag": "滑块拖拽",
-    "round_slider": "圆形滑条",
+    "round_slider": "滑条点击",
+    "special": "特殊操作",
 }
 METHOD_MAP_REVERSE = {v: k for k, v in METHOD_MAP.items()}
 
@@ -101,12 +105,13 @@ class CompareItem:
 class CompareItemDialog(tk.Toplevel):
     """设定参数编辑对话框（新建/编辑共用）"""
 
-    def __init__(self, parent, item=None, title="编辑设定参数"):
+    def __init__(self, parent, item=None, title="编辑设定参数", has_special_type=False):
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
         self.grab_set()
         self.result = None  # 关闭时存放 CompareItem 或 None
+        self._has_special_type = has_special_type
 
         self.configure(bg=COLORS["bg"])
 
@@ -160,9 +165,12 @@ class CompareItemDialog(tk.Toplevel):
         tk.Label(main_frame, text="类型:", bg=COLORS["bg"], fg=COLORS["label_fg"],
                  font=("Microsoft YaHei UI", 9)).grid(
             row=row, column=0, sticky=tk.E, padx=(0, 8), pady=pad_y)
-        self.type_var = tk.StringVar(value="开关")
+        self.type_var = tk.StringVar(value="蓝色开关")
+        type_values = list(TYPE_MAP.values())
+        if not self._has_special_type:
+            type_values = [v for v in type_values if v != "特殊操作"]
         self.type_combo = ttk.Combobox(main_frame, textvariable=self.type_var,
-                                       values=list(TYPE_MAP.values()),
+                                       values=type_values,
                                        state="readonly", width=28,
                                        font=("Microsoft YaHei UI", 9))
         self.type_combo.grid(row=row, column=1, columnspan=2, sticky=tk.W, pady=pad_y)
@@ -219,14 +227,6 @@ class CompareItemDialog(tk.Toplevel):
                                     relief=tk.FLAT, cursor="hand2")
         self.cancel_btn.pack(side=tk.LEFT, padx=10)
 
-        btn_test = tk.Button(btn_frame, text="测试", width=10,
-                             command=self._on_test,
-                             bg="#3c6e71", fg="white",
-                             font=("Microsoft YaHei UI", 9),
-                             activebackground="#4c8a8d", activeforeground="white",
-                             relief=tk.FLAT, cursor="hand2")
-        btn_test.pack(side=tk.LEFT, padx=10)
-
         # 绑定回车确认、Esc取消
         self.bind("<Return>", lambda e: self._on_ok())
         self.bind("<Escape>", lambda e: self._on_cancel())
@@ -262,22 +262,27 @@ class CompareItemDialog(tk.Toplevel):
         self._on_type_changed()
 
     def _on_type_changed(self, event=None):
-        """类型切换时动态调整目标值控件：开关=下拉，操作=隐藏，其他=输入框"""
+        """类型切换时动态调整目标值控件：开关=下拉，操作/特殊操作=隐藏，其他=输入框"""
         type_cn = self.type_var.get()
         row = 3
-        if type_cn == "开关":
+        if type_cn in ("蓝色开关", "勾选开关"):
             self.target_value_entry.grid_forget()
             self.target_value_combo.grid(row=row, column=1, columnspan=2, sticky=tk.W, pady=8)
-            # 确保值在有效范围内
+            self.method_combo.config(state="readonly")
             if self.target_value_var.get() not in ("开启", "关闭"):
                 self.target_value_var.set("开启")
-        elif type_cn == "按钮":
+        elif type_cn in ("按钮", "特殊操作"):
             self.target_value_entry.grid_forget()
             self.target_value_combo.grid_forget()
+            if type_cn == "特殊操作":
+                self.method_combo.config(state="disabled")
+                self.target_value_var.set("")
+            else:
+                self.method_combo.config(state="readonly")
         else:
             self.target_value_combo.grid_forget()
             self.target_value_entry.grid(row=row, column=1, columnspan=2, sticky=tk.W, pady=8)
-            # 清除开关相关的残留文本
+            self.method_combo.config(state="readonly")
             if self.target_value_var.get() in ("开启", "关闭"):
                 self.target_value_var.set("")
 
@@ -291,6 +296,10 @@ class CompareItemDialog(tk.Toplevel):
 
         type_cn = self.type_var.get()
         method_cn = self.method_var.get()
+
+        # 特殊操作强制设置方法为 special
+        if type_cn == "特殊操作":
+            method_cn = "special"
 
         self.result = CompareItem(
             name=name,
@@ -306,94 +315,15 @@ class CompareItemDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
-    def _get_editor(self):
-        """向上查找 SMDConfigEditor 实例"""
-        w = self.master
-        while w is not None:
-            if hasattr(w, 'game_monitor_ref'):
-                return w
-            w = getattr(w, 'master', None)
-        return None
-
-    def _on_test(self):
-        """测试当前参数的OCR查找和点击"""
-        import ctypes
-        import time
-
-        ocr_label = self.ocr_label_var.get().strip()
-        if not ocr_label:
-            editor._log("[测试] OCR标签不能为空")
-            return
-
-        editor = self._get_editor()
-        if not editor:
-            logging.warning("[测试] 无法访问编辑器")
-            return
-
-        ocr_engine = editor._get_test_ocr()
-        if not ocr_engine:
-            return
-
-        game_title = ''
-        if editor.game_monitor_ref:
-            game_title = editor.game_monitor_ref.config.window.get('title', '')
-        if not game_title:
-            config_path = os.path.join(os.path.dirname(__file__), 'configs', 'default.json')
-            if os.path.isfile(config_path):
-                try:
-                    import json
-                    with open(config_path, 'r', encoding='utf-8') as f:
-                        cfg = json.load(f)
-                    game_title = cfg.get('window', {}).get('title', '')
-                except Exception:
-                    pass
-        if not game_title:
-            editor._log("[测试] 未配置游戏窗口标题")
-            return
-
-        hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
-        if not hwnd:
-            editor._log(f"[测试] 未找到游戏窗口: {game_title}")
-            return
-
-        ctypes.windll.user32.ShowWindow(hwnd, 9)
-        ctypes.windll.user32.SetForegroundWindow(hwnd)
-
-        try:
-            import ctypes
-            import ctypes.wintypes
-            from PIL import ImageGrab
-            rect = ctypes.wintypes.RECT()
-            ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
-            img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
-            items = editor._ocr_recognize_with_pos(ocr_engine, img)
-            editor._log(f"[测试] OCR识别结果: {[(t, cx, cy) for t, cx, cy in items]}")
-            found = False
-            for text, cx, cy in items:
-                if ocr_label in text:
-                    abs_x = rect.left + cx
-                    abs_y = rect.top + cy
-                    ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-                    time.sleep(0.05)
-                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-                    found = True
-                    editor._log(f"[测试] 找到 '{ocr_label}' 并点击 ({cx}, {cy})")
-                    break
-            if not found:
-                editor._log(f"[测试] 未在游戏窗口中找到 '{ocr_label}'")
-        except Exception as e:
-            editor._log(f"[测试] 测试失败: {e}")
-
 
 class SMDConfigEditor(tk.Toplevel):
     """SMD 配置设定参数编辑器主窗口"""
 
-    def __init__(self, parent, on_save_callback=None, game_monitor_ref=None):
+    def __init__(self, parent, on_save_callback=None, game_monitor_ref=None, config_path=None):
         super().__init__(parent)
         self.title("SMD 配置编辑器")
-        self.geometry("800x600")
-        self.minsize(700, 500)
+        self.geometry("800x700")
+        self.minsize(700, 600)
         self.configure(bg=COLORS["bg"])
 
         # 回调函数：保存后通知父窗口
@@ -401,8 +331,9 @@ class SMDConfigEditor(tk.Toplevel):
         # GameMonitor 实例引用（用于测试功能）
         self.game_monitor_ref = game_monitor_ref
 
-        # 固定配置文件路径
-        self.config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        # 默认配置文件路径
+        self.default_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        self.config_path = config_path if config_path and os.path.isfile(config_path) else self.default_config_path
 
         # 配置数据结构：{tab_key: {"items": [CompareItem, ...], "extra": {}}}
         self.config_data = {}
@@ -418,6 +349,9 @@ class SMDConfigEditor(tk.Toplevel):
         # 拖放相关状态
         self._drag_start_index = None
         self._dragging = False
+
+        # 各脚本类型的已选脚本名（内存中独立保存，不立即写入文件）
+        self._script_selections = {}
 
         self._build_ui()
         self._apply_dark_theme()
@@ -616,7 +550,29 @@ class SMDConfigEditor(tk.Toplevel):
         bottom_frame = tk.Frame(self, bg=COLORS["bg"])
         bottom_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
-        btn_save = tk.Button(bottom_frame, text="保存配置", width=12,
+        # 创建水平容器，包含左侧控件组和右侧关闭按钮
+        content_frame = tk.Frame(bottom_frame, bg=COLORS["bg"])
+        content_frame.pack(fill=tk.X)
+
+        # 左侧控件组（保存到、下拉框、保存配置、恢复默认）
+        left_frame = tk.Frame(content_frame, bg=COLORS["bg"])
+        left_frame.pack(side=tk.LEFT, fill=tk.X, pady=5)
+
+        # 保存目标选择
+        save_row = tk.Frame(left_frame, bg=COLORS["bg"])
+        save_row.pack(side=tk.LEFT, padx=(0, 10))
+        tk.Label(save_row, text="保存到:", bg=COLORS["bg"], fg=COLORS["label_fg"],
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT, padx=(0, 5))
+        self._save_target_var = tk.StringVar()
+        self._save_target_combo = ttk.Combobox(save_row, textvariable=self._save_target_var,
+                                               values=[], width=15,
+                                               font=("Microsoft YaHei UI", 9))
+        self._save_target_combo.pack(side=tk.LEFT, padx=2)
+        # 初始化保存目标列表
+        self._refresh_save_targets()
+
+        # 保存配置按钮
+        btn_save = tk.Button(left_frame, text="保存配置", width=12,
                              command=self._on_save_config,
                              bg=COLORS["highlight_bg"], fg="white",
                              font=("Microsoft YaHei UI", 9),
@@ -624,13 +580,23 @@ class SMDConfigEditor(tk.Toplevel):
                              relief=tk.FLAT, cursor="hand2")
         btn_save.pack(side=tk.LEFT, padx=(0, 5))
 
-        btn_close = tk.Button(bottom_frame, text="关闭", width=12,
-                              command=self.destroy,
-                              bg=COLORS["button_bg"], fg="white",
+        # 恢复默认按钮
+        btn_restore = tk.Button(left_frame, text="恢复默认", width=12,
+                                command=self._on_restore_default,
+                                bg="#6a4a4a", fg="white",
+                                font=("Microsoft YaHei UI", 9),
+                                activebackground="#7a5a5a", activeforeground="white",
+                                relief=tk.FLAT, cursor="hand2")
+        btn_restore.pack(side=tk.LEFT, padx=(0, 5))
+
+        # 右侧关闭按钮
+        btn_close = tk.Button(content_frame, text="关闭", width=12,
+                              command=self._on_close,  # 假设你有这个方法
+                              bg="#555555", fg="white",
                               font=("Microsoft YaHei UI", 9),
-                              activebackground="#4c4c4c", activeforeground="white",
+                              activebackground="#666666", activeforeground="white",
                               relief=tk.FLAT, cursor="hand2")
-        btn_close.pack(side=tk.RIGHT)
+        btn_close.pack(side=tk.RIGHT, pady=5)
 
         self.protocol("WM_DELETE_WINDOW", self._on_close)
 
@@ -760,10 +726,21 @@ class SMDConfigEditor(tk.Toplevel):
         self.script_listbox.bind("<<ListboxSelect>>", self._on_script_selected)
         self._refresh_script_list()
 
+        # 脚本信息按钮（每次刷新时重建）
+        meta_row = tk.Frame(list_row, bg=COLORS["special_frame_bg"])
+        meta_row.pack(fill=tk.X, pady=(4, 0))
+        tk.Button(meta_row, text="脚本信息", font=("Microsoft YaHei UI", 8),
+                  bg="#4a4a6a", fg="white", relief=tk.FLAT, cursor="hand2",
+                  command=self._open_script_meta_editor).pack(side=tk.LEFT)
+
     def _on_script_type_changed(self, event=None):
-        """脚本类型切换时刷新文件列表"""
+        """脚本类型切换时刷新文件列表，并显示当前类型已选脚本名"""
+        script_type = self.script_type_var.get()
+        # 显示当前类型在内存中的已选脚本名
+        last_script = self._script_selections.get(script_type, "")
+        self.selected_script_var.set(last_script)
         self._refresh_script_list()
-        self._save_tab_extra("script_type", self.script_type_var.get())
+        self._save_tab_extra("script_type", script_type)
 
     def _refresh_script_list(self):
         """根据脚本类型刷新 C:\\Spc\\ 下的 .bin 文件列表"""
@@ -772,10 +749,6 @@ class SMDConfigEditor(tk.Toplevel):
         self.script_listbox.delete(0, tk.END)
 
         script_type = self.script_type_var.get() if hasattr(self, 'script_type_var') else "恶化"
-        tab_info = SMD_TABS[self.current_tab_index]
-
-        # 显示/隐藏自定义输入
-        # （当前所有类型都按前缀过滤，自定义显示全部，无需额外输入）
 
         # 根据类型确定前缀规则
         prefix_map = {
@@ -787,22 +760,23 @@ class SMDConfigEditor(tk.Toplevel):
             "自定义": "",
         }
         prefix = prefix_map.get(script_type, "")
-        custom_name = self.custom_name_var.get().strip() if hasattr(self, 'custom_name_var') else ""
 
         # 扫描目录
         scan_dir = r"C:\Spc"
         if not os.path.isdir(scan_dir):
             self.script_listbox.insert(tk.END, f"目录不存在: {scan_dir}")
+            self._set_script_name_color("red")
             return
 
         try:
             files = sorted([f for f in os.listdir(scan_dir) if f.endswith('.bin')])
         except Exception:
+            self._set_script_name_color("red")
             return
 
         # 过滤：自定义显示全部，其他按前缀
         if script_type == "自定义":
-            matched = files  # 显示全部
+            matched = files
         elif prefix:
             matched = [f for f in files if f.lower().startswith(prefix.lower())]
         else:
@@ -810,24 +784,31 @@ class SMDConfigEditor(tk.Toplevel):
 
         if not matched:
             self.script_listbox.insert(tk.END, f"未找到匹配的脚本文件")
+            # 列表为空，已选脚本名变红色提示
+            self._set_script_name_color("red")
             return
 
-        # 默认选中上次的脚本
-        last_selected = tab_info.get("selected_script", "")
-        select_idx = 0
+        # 从内存中读取当前类型的已选脚本
+        last_selected = self._script_selections.get(script_type, "")
+        select_idx = -1
         for i, f in enumerate(matched):
             self.script_listbox.insert(tk.END, f)
             if f == last_selected:
                 select_idx = i
-        self.script_listbox.selection_set(select_idx)
-        self.script_listbox.see(select_idx)
 
-        # 脚本信息按钮
-        meta_row = tk.Frame(list_row, bg=COLORS["special_frame_bg"])
-        meta_row.pack(fill=tk.X, pady=(4, 0))
-        tk.Button(meta_row, text="脚本信息", font=("Microsoft YaHei UI", 8),
-                  bg="#4a4a6a", fg="white", relief=tk.FLAT, cursor="hand2",
-                  command=self._open_script_meta_editor).pack(side=tk.LEFT)
+        # 设置选中并恢复绿色
+        self._set_script_name_color("#4ecca3")
+        if select_idx >= 0:
+            self.script_listbox.selection_set(select_idx)
+            self.script_listbox.see(select_idx)
+        elif matched:
+            self.script_listbox.selection_set(0)
+            self.script_listbox.see(0)
+
+    def _set_script_name_color(self, color):
+        """设置已选脚本名的显示颜色"""
+        if hasattr(self, 'selected_script_entry') and self.selected_script_entry:
+            self.selected_script_entry.config(fg=color)
 
     def _open_script_meta_editor(self):
         """打开选中脚本的元数据编辑器"""
@@ -839,12 +820,14 @@ class SMDConfigEditor(tk.Toplevel):
         ScriptMetaEditor(self, script_name)
 
     def _on_script_selected(self, event=None):
-        """脚本文件选中回调"""
+        """脚本文件选中回调（保存到内存，不立即写入文件）"""
         sel = self.script_listbox.curselection()
         if sel:
             script_name = self.script_listbox.get(sel[0])
             self.selected_script_var.set(script_name)
-            self._save_tab_extra("selected_script", script_name)
+            script_type = self.script_type_var.get() if hasattr(self, 'script_type_var') else "恶化"
+            self._script_selections[script_type] = script_name
+            self._set_script_name_color("#4ecca3")
 
     def _save_tab_extra(self, key, value):
         """保存标签页的额外配置（脚本类型、选中的脚本等）"""
@@ -863,7 +846,9 @@ class SMDConfigEditor(tk.Toplevel):
         if tab_key is None:
             return
 
-        dialog = CompareItemDialog(self, item=None, title="新建设定参数")
+        tab_info = SMD_TABS[self.current_tab_index]
+        has_special = tab_info.get("has_script_selector", False)
+        dialog = CompareItemDialog(self, item=None, title="新建设定参数", has_special_type=has_special)
         self.wait_window(dialog)
 
         if dialog.result is not None:
@@ -887,7 +872,9 @@ class SMDConfigEditor(tk.Toplevel):
             return
 
         item = items[idx]
-        dialog = CompareItemDialog(self, item=item, title="编辑设定参数")
+        tab_info = SMD_TABS[self.current_tab_index]
+        has_special = tab_info.get("has_script_selector", False)
+        dialog = CompareItemDialog(self, item=item, title="编辑设定参数", has_special_type=has_special)
         self.wait_window(dialog)
 
         if dialog.result is not None:
@@ -916,8 +903,41 @@ class SMDConfigEditor(tk.Toplevel):
             self._refresh_items_list()
 
     def _normalize_match_text(self, text):
-        """规范化匹配文本：去掉 - ( ) 等干扰符号"""
-        return text.replace('-', '').replace('－', '').replace('(', '').replace(')', '').replace('（', '').replace('）', '').replace(' ', '')
+        """规范化匹配文本：去掉 - ( ) _ 等干扰符号"""
+        return (text.replace('-', '').replace('－', '')
+                .replace('(', '').replace(')', '')
+                .replace('（', '').replace('）', '')
+                .replace('_', '').replace(' ', ''))
+
+    def _strip_bin(self, name):
+        """去掉 .bin 后缀"""
+        if name and name.lower().endswith('.bin'):
+            return name[:-4]
+        return name
+
+    def _normalize_script_name(self, text):
+        """专门用于脚本名匹配的规范化：去掉更多干扰符号、统一小写"""
+        return (text.replace('-', '').replace('－', '')
+                .replace('(', '').replace(')', '')
+                .replace('（', '').replace('）', '')
+                .replace('_', '').replace(' ', '')
+                .replace('.', '').replace('x', '').replace('X', '')
+                .lower())
+
+    def _match_script_name(self, target, ocr_text):
+        """匹配脚本名：去掉.bin、干扰符号和x后，统一小写，支持截断匹配"""
+        t = self._normalize_script_name(self._strip_bin(target))
+        o = self._normalize_script_name(self._strip_bin(ocr_text))
+        if not t or not o:
+            return False
+        # 前缀/包含匹配（列表截断或OCR误差）
+        if t in o or o in t:
+            return True
+        # 取较短的长度做前缀匹配（至少3个字符）
+        min_len = min(len(t), len(o))
+        if min_len >= 3:
+            return t[:min_len] == o[:min_len]
+        return False
 
     def _test_click_in_game(self, hwnd, ocr_label):
         """在游戏窗口中OCR查找文字并点击（忽略 - ( ) 等符号），返回是否成功"""
@@ -987,7 +1007,7 @@ class SMDConfigEditor(tk.Toplevel):
                 self._test_ocr_engine(np.zeros((32, 32, 3), dtype=np.uint8))
             except Exception as e:
                 self._test_ocr_engine = None
-                logging.error(f"[测试] OCR引擎初始化失败: {e}")
+                self._log(f"[测试] OCR引擎初始化失败: {e}")
                 return None
         return self._test_ocr_engine
 
@@ -1146,69 +1166,59 @@ class SMDConfigEditor(tk.Toplevel):
             self._log(f"[测试]   OCR点击异常: {e}")
         return False
 
-    def _find_slider_thumb(self, img, value_pos, label_pos, win_w, win_h):
-        """在截图上找圆形滑块位置（白色圆形，在数值右侧）"""
+    def _find_slider_thumb(self, img, value_pos, label_pos, win_w, win_h, current_value=None):
+        """在截图上找圆形滑块位置（白色圆形，在数值右侧）
+        搜索范围：数值x坐标 + 字符长度*10/2 起，宽130像素，y±15像素
+        使用区域采样白色像素密度找滑块中心，避免和文字混淆
+        返回 (x, y) 绝对窗口内坐标，或 None
+        """
         import cv2
         import numpy as np
         img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
 
-        if value_pos:
-            search_left = value_pos[0] + 20
-        elif label_pos:
-            search_left = label_pos[0] + 100
-        else:
+        if not value_pos:
             return None
-        search_right = int(win_w * 0.85)
-        search_top = max(0, (label_pos[1] if label_pos else win_h // 2) - 20)
-        search_bottom = min(win_h, (label_pos[1] if label_pos else win_h // 2) + 20)
+
+        # 搜索范围：数值右侧
+        char_len = len(current_value) if current_value else 3
+        search_left = int(value_pos[0] + char_len * 10 / 2)
+        search_right = search_left + 130
+        search_top = max(0, value_pos[1] - 15)
+        search_bottom = min(win_h, value_pos[1] + 15)
 
         if search_left >= search_right or search_top >= search_bottom:
             return None
 
-        roi = gray[search_top:search_bottom, search_left:search_right]
-        _, thresh = cv2.threshold(roi, 200, 255, cv2.THRESH_BINARY)
-        circles = cv2.HoughCircles(thresh, cv2.HOUGH_GRADIENT, dp=1,
-                                   minDist=20, param1=50, param2=15,
-                                   minRadius=6, maxRadius=14)
-        if circles is not None and len(circles) > 0:
-            c = circles[0][0]
-            cx = int(c[0]) + search_left
-            cy = int(c[1]) + search_top
+        roi = img_cv[search_top:search_bottom, search_left:search_right]
+
+        # 区域采样：白色像素 (R>200, G>200, B>200) 的密集区域
+        white_mask = (roi[:, :, 2] > 200) & (roi[:, :, 1] > 200) & (roi[:, :, 0] > 200)
+        white_pts = np.where(white_mask)
+        if len(white_pts[0]) > 0:
+            cx = int(np.median(white_pts[1])) + search_left
+            cy = int(np.median(white_pts[0])) + search_top
             return (cx, cy)
         return None
 
     def _drag_slider_to_value(self, hwnd, rect, ocr_label, thumb_pos, cur_val, tgt_val, label_pos, max_iterations=15):
-        """通过拖拽圆形滑块来调整数值到目标值"""
+        """二分法在滑条轨道上逼近目标值（不依赖线性假设）"""
+        import ctypes
         import time
-        import numpy as np
         from PIL import ImageGrab
 
-        slider_left = thumb_pos[0] - 80
-        slider_right = thumb_pos[0] + 80
-        slider_range = slider_right - slider_left
-        if slider_range <= 0:
-            slider_range = 160
-            slider_left = thumb_pos[0] - 80
-            slider_right = thumb_pos[0] + 80
+        # 滑条轨道范围
+        left_bound = thumb_pos[0] - 65
+        right_bound = thumb_pos[0] + 65
+        target_y = thumb_pos[1]
 
         for iteration in range(max_iterations):
-            diff = tgt_val - cur_val
-            if abs(diff) < 0.005:
+            if abs(cur_val - tgt_val) < 0.1:
                 self._log(f"[测试]   圆形滑条: 达到目标值 {tgt_val}")
                 break
 
-            pixels_per_unit = slider_range / 10.0
-            move_pixels = int(diff * pixels_per_unit)
-            move_pixels = max(-100, min(100, move_pixels))
-            if abs(move_pixels) < 2:
-                move_pixels = 2 if diff > 0 else -2
-
-            target_x = thumb_pos[0] + move_pixels
-            target_x = max(slider_left, min(slider_right, target_x))
-            target_y = thumb_pos[1]
-
-            abs_x = rect.left + target_x
+            # 二分：点击中点
+            mid_x = int((left_bound + right_bound) / 2)
+            abs_x = rect.left + mid_x
             abs_y = rect.top + target_y
 
             self._activate_window(hwnd)
@@ -1217,10 +1227,8 @@ class SMDConfigEditor(tk.Toplevel):
             time.sleep(0.05)
             ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
             time.sleep(0.05)
-            ctypes.windll.user32.SetCursorPos(abs_x, abs_y)
-            time.sleep(0.1)
             ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
-            time.sleep(0.5)
+            time.sleep(0.8)
 
             # 重新截图读取当前值
             try:
@@ -1233,7 +1241,7 @@ class SMDConfigEditor(tk.Toplevel):
                     norm_label = self._normalize_match_text(ocr_label)
                     new_val = None
                     for ocr_text, cx, cy in items:
-                        if abs(cy - label_pos[1]) < 30 and cx > label_pos[0]:
+                        if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
                             if any(c.isdigit() or c == '.' for c in ocr_text):
                                 try:
                                     new_val = float(ocr_text)
@@ -1242,8 +1250,12 @@ class SMDConfigEditor(tk.Toplevel):
                                     continue
                     if new_val is not None:
                         cur_val = new_val
-                        thumb_pos = (thumb_pos[0] + move_pixels, thumb_pos[1])
                         self._log(f"[测试]   圆形滑条: 迭代{iteration+1}, 当前值={cur_val}, 目标={tgt_val}")
+                        # 二分调整范围
+                        if cur_val > tgt_val:
+                            right_bound = mid_x
+                        else:
+                            left_bound = mid_x
                     else:
                         self._log(f"[测试]   圆形滑条: 无法读取当前值，停止迭代")
                         break
@@ -1261,6 +1273,16 @@ class SMDConfigEditor(tk.Toplevel):
         # 在数值右侧区域尝试点击不同位置
         # 这是最简实现：直接点击滑条中间位置几次
         self._log(f"[重启] 圆形滑条回退: 无法精确控制，跳过 '{ocr_label}'")
+
+    def _send_unicode_char(self, hwnd, ch):
+        """发送单个Unicode字符到窗口"""
+        import ctypes
+        import time
+        KEYEVENTF_UNICODE = 0x0004
+        KEYEVENTF_KEYUP = 0x0002
+        ctypes.windll.user32.keybd_event(0, ord(ch), KEYEVENTF_UNICODE, 0)
+        time.sleep(0.02)
+        ctypes.windll.user32.keybd_event(0, ord(ch), KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
 
     def _set_smd_parameter(self, hwnd, item):
         """设置单个SMD参数（原力界面：控件在左，标题在右）"""
@@ -1282,7 +1304,7 @@ class SMDConfigEditor(tk.Toplevel):
             # 开关/下拉框：控件在左，标题在右
             # 下拉框：需要先点击控件(当前值区域)展开列表，再选择目标值
             # 开关：直接点击控件区域即可切换
-            if item_type == 'select':
+            if item_type == 'dropdown':
                 # 下拉框操作（原力界面布局：[当前值 | ▼] ... 标题文字）
                 # 1. OCR找到标题文字位置
                 # 2. 在标题左侧找下拉箭头(▼)按钮并点击展开
@@ -1311,9 +1333,10 @@ class SMDConfigEditor(tk.Toplevel):
 
                         # 3. 点击标题左侧固定偏移处的下拉箭头(▼)
                         # 原力界面布局: [当前值文本 | ▼] ... 标题文字
-                        # 箭头按钮在标题左侧约100px处
-                        arrow_x = title_pos[0] - 100
-                        arrow_y = title_pos[1]
+                        char_count = len(ocr_label)
+                        text_half_width = int(char_count / 2 * 15)
+                        arrow_x = max(0,title_pos[0] - text_half_width-50)
+                        arrow_y = title_pos[1] + 10
                         abs_x = rect.left + arrow_x
                         abs_y = rect.top + arrow_y
                         self._log(f"[重启] 下拉框: 点击固定偏移箭头位置 ({arrow_x}, {arrow_y})")
@@ -1334,7 +1357,7 @@ class SMDConfigEditor(tk.Toplevel):
                 except Exception as e:
                     self._log(f"[重启] 下拉框操作失败: {e}")
             elif item_type == 'toggle':
-                # 开关：通过颜色检测判断当前状态（蓝色=开启，灰色/黑色=关闭）
+                # 蓝色开关：通过颜色检测判断当前状态（蓝色=开启，灰色/黑色=关闭）
                 need_click = True
                 try:
                     import cv2
@@ -1355,13 +1378,20 @@ class SMDConfigEditor(tk.Toplevel):
                                 break
                         if label_pos:
                             # 开关控件在标签文字的左侧
-                            # 先大范围扫描找蓝色像素最密集的区域
+                            # 根据标签文字长度和开关按钮大小动态计算扫描范围
+                            # 原力界面布局: [开关按钮50px] [间距] [标签文字]
+                            # scan_left = 标签中心 - 字数/2*15 - 开关宽度50
+                            # scan_right = 标签中心 - 字数/2*15 - 间距10
                             import numpy as np
                             img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-                            scan_left = max(0, label_pos[0] - 40)
-                            scan_right = max(0, label_pos[0] - 10)
-                            scan_top = max(0, label_pos[1] - 5)
-                            scan_bottom = min(img_cv.shape[0], label_pos[1] + 5)
+                            char_count = len(ocr_label)
+                            text_half_width = int(char_count / 2 * 15)
+                            switch_width = 50
+                            switch_height = 30
+                            scan_left = max(0, label_pos[0] - text_half_width - switch_width)
+                            scan_right = max(0, label_pos[0] - text_half_width - 10)
+                            scan_top = max(0, label_pos[1] - switch_height // 2)
+                            scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2)
                             if scan_left < scan_right and scan_top < scan_bottom:
                                 scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
                                 # 找蓝色像素（B>80, B>G+20, B>R+20）
@@ -1378,23 +1408,200 @@ class SMDConfigEditor(tk.Toplevel):
                                     mean_bgr = sample_roi.mean(axis=(0, 1))
                                     b, g, r = mean_bgr
                                     is_blue = (b > 80) and (b > g + 20) and (b > r + 20)
-                                    self._log(f"[重启] 开关 '{name}' 颜色采样 位置=({blue_cx},{blue_cy}) B={b:.0f} G={g:.0f} R={r:.0f}, "
+                                    self._log(f"[重启] 蓝色开关 '{name}' 颜色采样 位置=({blue_cx},{blue_cy}) B={b:.0f} G={g:.0f} R={r:.0f}, "
                                                  f"{'蓝色=开启' if is_blue else '非蓝=关闭'}")
                                     want_on = target_value in ('开启', '1', 'true', 'True', 'on', 'ON')
                                     if is_blue and want_on:
-                                        self._log(f"[重启] 开关 '{name}' 已是开启状态，跳过")
+                                        self._log(f"[重启] 蓝色开关 '{name}' 已是开启状态，跳过")
                                         need_click = False
                                     elif not is_blue and not want_on:
-                                        self._log(f"[重启] 开关 '{name}' 已是关闭状态，跳过")
+                                        self._log(f"[重启] 蓝色开关 '{name}' 已是关闭状态，跳过")
                                         need_click = False
                                     else:
-                                        self._log(f"[重启] 开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
+                                        self._log(f"[重启] 蓝色开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
                                 else:
-                                    self._log(f"[重启] 开关 '{name}' 未检测到蓝色像素，跳过检测直接点击")
+                                    self._log(f"[重启] 蓝色开关 '{name}' 未检测到蓝色像素，跳过检测直接点击")
                 except Exception as e:
-                    self._log(f"[重启] 检测开关状态失败，继续点击: {e}")
+                    self._log(f"[重启] 检测蓝色开关状态失败，继续点击: {e}")
                 if need_click:
                     self._click_ocr_in_game(hwnd, ocr_label)
+            elif item_type == 'check_toggle':
+                # 勾选开关：通过检测白色对勾像素判断当前状态（有对勾=开启，无对勾=关闭）
+                need_click = True
+                try:
+                    import cv2
+                    import numpy as np
+                    from PIL import ImageGrab
+                    rect = ctypes.wintypes.RECT()
+                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+
+                    if self._get_test_ocr():
+                        items = self._ocr_recognize_with_pos(self._get_test_ocr(), img)
+                        norm_label = self._normalize_match_text(ocr_label)
+                        # 找到标签文字位置
+                        label_pos = None
+                        for ocr_text, cx, cy in items:
+                            if norm_label in self._normalize_match_text(ocr_text):
+                                label_pos = (cx, cy)
+                                break
+                        if label_pos:
+                            # 勾选框在标签文字的左侧
+                            # 布局: [勾选框] [间距] [标签文字]
+                            img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+                            char_count = len(ocr_label)
+                            text_half_width = int(char_count / 2 * 15)
+                            box_width = 20
+                            box_height = 20
+                            scan_left = max(0, label_pos[0] - text_half_width - box_width -20)
+                            scan_right = max(0, label_pos[0] - text_half_width - 5)
+                            scan_top = max(0, label_pos[1] - box_height // 2 + 10)
+                            scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2 + 10)
+                            if scan_left < scan_right and scan_top < scan_bottom:
+                                scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
+                                # 找白色/浅色像素（对勾颜色），对勾通常是白色或浅灰色
+                                white_mask = (scan_roi[:, :, 2] > 180) & (scan_roi[:, :, 1] > 180) & (scan_roi[:, :, 0] > 180)
+                                white_pts = np.where(white_mask)
+                                white_count = len(white_pts[0])
+                                total_pixels = scan_roi.shape[0] * scan_roi.shape[1]
+                                # 白色像素占比超过一定阈值认为有对勾（开启状态）
+                                check_ratio = white_count / total_pixels if total_pixels > 0 else 0
+                                is_checked = check_ratio > 0.08
+                                self._log(f"[重启] 勾选开关 '{name}' 检测: 白色像素{white_count}/{total_pixels}, "
+                                         f"占比={check_ratio:.2%}, {'已勾选=开启' if is_checked else '未勾选=关闭'}")
+                                want_on = target_value in ('开启', '1', 'true', 'True', 'on', 'ON')
+                                if is_checked and want_on:
+                                    self._log(f"[重启] 勾选开关 '{name}' 已是开启状态，跳过")
+                                    need_click = False
+                                elif not is_checked and not want_on:
+                                    self._log(f"[重启] 勾选开关 '{name}' 已是关闭状态，跳过")
+                                    need_click = False
+                                else:
+                                    self._log(f"[重启] 勾选开关 '{name}' 目标{'开启' if want_on else '关闭'}，执行点击")
+                            else:
+                                self._log(f"[重启] 勾选开关 '{name}' 扫描区域无效，跳过检测直接点击")
+                except Exception as e:
+                    self._log(f"[重启] 检测勾选开关状态失败，继续点击: {e}")
+                if need_click:
+                    self._click_ocr_in_game(hwnd, ocr_label)
+            elif item_type == 'special':
+                # 特殊操作：以 ocr_label 为锚点，在其下方列表区域中寻找已选脚本名并点击
+                # 目标值取当前脚本类型的已选脚本名（从内存中读取）
+                script_type = self.script_type_var.get() if hasattr(self, 'script_type_var') else "恶化"
+                target_value = self._script_selections.get(script_type, "")
+                if not target_value:
+                    # 回退到配置文件中的值
+                    tab_info = SMD_TABS[self.current_tab_index]
+                    target_value = tab_info.get("selected_script", "")
+                if not target_value:
+                    self._log(f"[重启] 特殊操作: 未找到已选脚本名，跳过")
+                    return
+                self._log(f"[重启] 特殊操作: 查找脚本 '{target_value}'（类型: {script_type}）")
+                # 列表范围：锚点下方，宽200像素，高600像素
+                # 找不到则向下滚动继续寻找，直到列表底部
+                try:
+                    from PIL import ImageGrab
+                    import numpy as np
+                    import cv2
+                    rect = ctypes.wintypes.RECT()
+                    ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                    win_w = rect.right - rect.left
+                    win_h = rect.bottom - rect.top
+
+                    # 先找到 ocr_label 的位置作为锚点
+                    img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
+                    anchor_pos = None
+                    if self._get_test_ocr():
+                        items = self._ocr_recognize_with_pos(self._get_test_ocr(), img)
+                        norm_label = self._normalize_match_text(ocr_label)
+                        for ocr_text, cx, cy in items:
+                            if norm_label in self._normalize_match_text(ocr_text):
+                                anchor_pos = (cx, cy)
+                                break
+
+                    if not anchor_pos:
+                        self._log(f"[重启] 特殊操作: 未找到锚点 '{ocr_label}'")
+                        return
+
+                    # 列表区域：锚点下方，宽200像素，高600像素
+                    list_left = max(0, anchor_pos[0] - 200)
+                    list_right = min(win_w, anchor_pos[0] + 50)
+                    list_top = anchor_pos[1] + 10
+                    list_bottom = min(win_h, list_top + 650)
+
+                    max_scroll_attempts = 10
+                    scroll_step = 60  # 每次滚动像素
+
+                    # 先滚到列表顶部，避免漏找
+                    self._activate_window(hwnd)
+                    scroll_x = rect.left + (list_left + list_right) // 2
+                    scroll_y = rect.top + (list_top + list_bottom) // 2
+                    ctypes.windll.user32.SetCursorPos(scroll_x, scroll_y)
+                    time.sleep(0.1)
+                    WHEEL_DELTA = 120
+                    for _ in range(20):
+                        ctypes.windll.user32.mouse_event(0x0800, 0, 0, WHEEL_DELTA, 0)
+                        time.sleep(0.05)
+                    time.sleep(0.3)
+
+                    for attempt in range(max_scroll_attempts):
+                        # 截取列表区域
+                        abs_left = rect.left + list_left
+                        abs_top = rect.top + list_top
+                        abs_right = rect.left + list_right
+                        abs_bottom = rect.top + list_bottom
+                        list_img = ImageGrab.grab(bbox=(abs_left, abs_top, abs_right, abs_bottom))
+
+                        if self._get_test_ocr():
+                            list_items = self._ocr_recognize_with_pos(self._get_test_ocr(), list_img)
+                            t_norm = self._normalize_script_name(self._strip_bin(target_value))
+                            best_match = None
+                            best_diff = 999
+                            for ocr_text, cx, cy in list_items:
+                                o_norm = self._normalize_script_name(self._strip_bin(ocr_text))
+                                if not t_norm or not o_norm:
+                                    continue
+                                is_match = (t_norm in o_norm or o_norm in t_norm)
+                                if not is_match and len(t_norm) >= 3 and len(o_norm) >= 3:
+                                    min_len = min(len(t_norm), len(o_norm))
+                                    is_match = t_norm[:min_len] == o_norm[:min_len]
+                                if is_match:
+                                    diff = abs(len(o_norm) - len(t_norm))
+                                    if diff < best_diff:
+                                        best_diff = diff
+                                        best_match = (ocr_text, cx, cy)
+                            if best_match:
+                                ocr_text, cx, cy = best_match
+                                # 找到了，点击
+                                click_x = abs_left + cx
+                                click_y = abs_top + cy
+                                self._activate_window(hwnd)
+                                time.sleep(0.2)
+                                ctypes.windll.user32.SetCursorPos(click_x, click_y)
+                                time.sleep(0.1)
+                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                time.sleep(0.05)
+                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                self._log(f"[重启] 特殊操作: 在列表中找到 '{target_value}' (OCR: '{ocr_text}') 并点击")
+                                return
+
+                        # 没找到，向下滚动列表区域
+                        self._log(f"[重启] 特殊操作: 第{attempt + 1}次滚动寻找 '{target_value}'")
+                        self._activate_window(hwnd)
+                        # 在列表区域中心滚轮向下
+                        scroll_x = rect.left + (list_left + list_right) // 2
+                        scroll_y = rect.top + (list_top + list_bottom) // 2
+                        ctypes.windll.user32.SetCursorPos(scroll_x, scroll_y)
+                        time.sleep(0.1)
+                        # 滚轮向下 (-WHEEL_DELTA)
+                        WHEEL_DELTA = 300
+                        ctypes.windll.user32.mouse_event(0x0800, 0, 0, -WHEEL_DELTA, 0)
+                        time.sleep(0.5)
+
+                    self._log(f"[重启] 特殊操作: 滚动到底仍未找到 '{target_value}'")
+                except Exception as e:
+                    self._log(f"[重启] 特殊操作失败: {e}")
+
             else:
                 self._click_ocr_in_game(hwnd, ocr_label)
 
@@ -1421,8 +1628,15 @@ class SMDConfigEditor(tk.Toplevel):
                         self._log(f"[重启] 未找到滑块 '{ocr_label}'")
                         return
 
-                    abs_x = rect.left + ctrl_pos[0]
-                    abs_y = rect.top + ctrl_pos[1]
+                    char_count = len(ocr_label)
+                    text_half_width = int(char_count / 2 * 15)
+                    input_width = 100
+                    # input_height = 20
+
+                    click_left = max(0, ctrl_pos[0] - text_half_width  - input_width)
+                    click_top = max(0, ctrl_pos[1]  )
+                    abs_x = rect.left + click_left
+                    abs_y = rect.top + click_top
 
                     # 步骤1: Ctrl+左键点击控件区域
                     self._activate_window(hwnd)
@@ -1492,6 +1706,8 @@ class SMDConfigEditor(tk.Toplevel):
             # 数值无法点击编辑，只能通过点击滑条进度位置或拖拽圆形滑块来变动
             # 策略：找到当前数值，计算目标比例，点击滑条对应位置
             try:
+                import ctypes
+                import ctypes.wintypes
                 from PIL import ImageGrab
                 rect = ctypes.wintypes.RECT()
                 ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
@@ -1517,16 +1733,14 @@ class SMDConfigEditor(tk.Toplevel):
                     current_value = None
                     value_pos = None
                     for ocr_text, cx, cy in items:
-                        if abs(cy - label_pos[1]) < 30 and cx > label_pos[0]:
+                        if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
                             if any(c.isdigit() or c == '.' for c in ocr_text):
                                 current_value = ocr_text
                                 value_pos = (cx, cy)
                                 break
 
-                    # 3. 找圆形滑块位置（同行、在数值右侧、通过像素颜色检测白色圆形）
-                    # 滑块在数值右侧，位置大约在窗口右半区域
-                    # 策略：在数值右侧区域扫描，找白色圆形滑块的中心
-                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_w, win_h)
+                    # 3. 找圆形滑块位置（同行、在数值右侧、通过区域采样白色像素检测）
+                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_w, win_h, current_value)
 
                     if thumb_pos and current_value and target_value:
                         try:
@@ -1614,7 +1828,9 @@ class SMDConfigEditor(tk.Toplevel):
         # 统一调用实际执行逻辑，所有类型检测都在 _set_smd_parameter 内部处理
         try:
             self._set_smd_parameter(hwnd, item.to_dict())
-            self._log(f"[测试] ✓ 完成 '{label}'")
+            # 特殊操作不输出"完成"（内部有自己的日志）
+            if item.value_set_method != 'special':
+                self._log(f"[测试] ✓ 完成 '{label}'")
         except Exception as e:
             self._log(f"[测试] ✗ 失败 '{label}': {e}")
 
@@ -1635,7 +1851,6 @@ class SMDConfigEditor(tk.Toplevel):
             config_path = os.path.join(os.path.dirname(__file__), 'configs', 'default.json')
             if os.path.isfile(config_path):
                 try:
-                    import json
                     with open(config_path, 'r', encoding='utf-8') as f:
                         cfg = json.load(f)
                     game_title = cfg.get('window', {}).get('title', '')
@@ -1704,7 +1919,8 @@ class SMDConfigEditor(tk.Toplevel):
             try:
                 self._set_smd_parameter(hwnd, item.to_dict())
                 results.append(f"✓ {item.name} ({label})")
-                self._log(f"[测试] ✓ 完成 '{label}'")
+                if item.value_set_method != 'special':
+                    self._log(f"[测试] ✓ 完成 '{label}'")
             except Exception as e:
                 results.append(f"✗ {item.name} ({label})")
                 self._log(f"[测试] ✗ 失败 '{label}': {e}")
@@ -1731,40 +1947,50 @@ class SMDConfigEditor(tk.Toplevel):
         self.items_listbox.selection_set(index)
 
     def _on_item_motion(self, event):
-        """鼠标拖动：实时交换位置"""
+        """鼠标拖动：仅标记拖动中（不实时交换）"""
         if self._drag_start_index is None:
             return
         self._dragging = True
 
+    def _on_item_release(self, event):
+        """鼠标释放：执行一次插入操作"""
+        if not self._dragging or self._drag_start_index is None:
+            self._drag_start_index = None
+            self._dragging = False
+            return
+
         tab_key = self._get_current_tab_key()
         if tab_key is None:
+            self._drag_start_index = None
+            self._dragging = False
             return
 
         items = self.config_data[tab_key]["items"]
         if not items:
+            self._drag_start_index = None
+            self._dragging = False
             return
 
-        # 计算当前鼠标悬停的索引
         target_index = self.items_listbox.nearest(event.y)
         if target_index < 0 or target_index == self._drag_start_index:
+            self._drag_start_index = None
+            self._dragging = False
             return
 
-        # 交换列表中的位置
+        # 从原位置取出，插入到目标位置
         start = self._drag_start_index
-        self._drag_start_index = target_index
-
-        # 执行交换
-        items[start], items[target_index] = items[target_index], items[start]
+        item = items.pop(start)
+        # pop后目标索引需要调整
+        adjusted_target = target_index - 1 if target_index > start else target_index
+        items.insert(adjusted_target, item)
 
         # 刷新列表显示
         self._refresh_items_list()
 
-        # 保持选中状态
+        # 保持选中状态（移动到了新位置）
         self.items_listbox.selection_clear(0, tk.END)
-        self.items_listbox.selection_set(target_index)
+        self.items_listbox.selection_set(adjusted_target)
 
-    def _on_item_release(self, event):
-        """鼠标释放：结束拖放"""
         self._drag_start_index = None
         self._dragging = False
 
@@ -1776,10 +2002,21 @@ class SMDConfigEditor(tk.Toplevel):
         for tab in SMD_TABS:
             key = tab["key"]
             data = self.config_data[key]
+            extra = dict(data.get("extra", {}))
             result[key] = {
                 "items": [item.to_dict() for item in data["items"]],
-                "extra": data.get("extra", {}),
+                "extra": extra,
             }
+        # script_selections 和 selected_script 同步保存
+        if "script_edit" not in result:
+            result["script_edit"] = {"items": [], "extra": {}}
+        extra = result["script_edit"]["extra"]
+        if self._script_selections:
+            extra["script_selections"] = dict(self._script_selections)
+        # selected_script 必须和当前 script_type 对应的 script_selections 一致
+        script_type = extra.get("script_type", "恶化")
+        if self._script_selections and script_type in self._script_selections:
+            extra["selected_script"] = self._script_selections[script_type]
         return result
 
     def _load_from_dict(self, data):
@@ -1789,15 +2026,26 @@ class SMDConfigEditor(tk.Toplevel):
             if key in data:
                 tab_data = data[key]
                 items = [CompareItem.from_dict(d) for d in tab_data.get("items", [])]
+                extra = tab_data.get("extra", {})
+                # script_selections 只从 script_edit 标签加载，清除其他标签中的残留
+                if "script_selections" in extra:
+                    if key == "script_edit":
+                        self._script_selections.update(extra["script_selections"])
+                    del extra["script_selections"]
                 self.config_data[key] = {
                     "items": items,
-                    "extra": tab_data.get("extra", {}),
+                    "extra": extra,
                 }
             else:
                 self.config_data[key] = {
                     "items": [],
                     "extra": {},
                 }
+        # 加载完成后同步 script_edit 的 selected_script
+        script_edit_extra = self.config_data.get("script_edit", {}).get("extra", {})
+        st = script_edit_extra.get("script_type", "恶化")
+        if self._script_selections and st in self._script_selections:
+            script_edit_extra["selected_script"] = self._script_selections[st]
 
     def _load_from_file(self, filepath):
         """从文件加载配置"""
@@ -1855,18 +2103,90 @@ class SMDConfigEditor(tk.Toplevel):
             self.log_text.configure(state=tk.DISABLED)
 
     def _on_close(self):
-        """窗口关闭时释放资源"""
+        """窗口关闭时自动保存配置并释放资源"""
+        # 自动保存配置（静默，不弹窗）
+        try:
+            self._save_to_file(self.config_path)
+            # 通知父窗口
+            if self.on_save_callback:
+                self.on_save_callback(self.config_path, self._build_save_dict())
+        except Exception:
+            pass
         self.release_resources()
         self.destroy()
 
+    def get_smd_config(self):
+        """返回当前配置字典（供外部同步使用）"""
+        return self._build_save_dict()
+
+    def set_smd_config(self, config_dict):
+        """从外部设置配置（供外部同步使用）"""
+        self._load_from_dict(config_dict)
+        self.config_data = {}
+        for tab in SMD_TABS:
+            key = tab["key"]
+            if key in config_dict:
+                tab_data = config_dict[key]
+                items = [CompareItem.from_dict(d) for d in tab_data.get("items", [])]
+                self.config_data[key] = {
+                    "items": items,
+                    "extra": tab_data.get("extra", {}),
+                }
+            else:
+                self.config_data[key] = {
+                    "items": [],
+                    "extra": {},
+                }
+        self._save_to_file(self.config_path)
+        self._refresh_items_list()
+
+    def _refresh_save_targets(self):
+        """刷新保存目标下拉列表（隐藏默认 smd_settings.json）"""
+        smd_dir = os.path.join(os.path.dirname(__file__), 'smd_config')
+        files = []
+        if os.path.isdir(smd_dir):
+            try:
+                files = sorted([f for f in os.listdir(smd_dir) if f.endswith('.json') and f != 'smd_settings.json'])
+            except Exception:
+                pass
+        self._save_target_combo['values'] = files
+        # 默认选中当前配置文件名
+        if self.config_path:
+            name = os.path.basename(self.config_path)
+            if name in files:
+                self._save_target_var.set(name)
+            elif files:
+                self._save_target_var.set(files[0])
+            else:
+                self._save_target_var.set('')
+
     def _on_save_config(self):
-        """保存配置按钮回调"""
-        filepath = self.config_path
+        """保存配置到下拉框选中的文件（支持手动输入新文件名）"""
+        target = self._save_target_var.get().strip()
+        if not target:
+            messagebox.showwarning("提示", "请选择或输入保存目标文件名", parent=self)
+            return
+        if not target.endswith('.json'):
+            target += '.json'
+        smd_dir = os.path.join(os.path.dirname(__file__), 'smd_config')
+        filepath = os.path.join(smd_dir, target)
         if self._save_to_file(filepath):
             messagebox.showinfo("保存成功", f"配置已保存到：\n{filepath}", parent=self)
+            # 刷新保存目标列表
+            self._refresh_save_targets()
+            self._save_target_var.set(target)
             # 通知父窗口
             if self.on_save_callback:
                 self.on_save_callback(filepath, self._build_save_dict())
+
+    def _on_restore_default(self):
+        """恢复默认配置：重新加载 smd_settings.json"""
+        if self.config_path == self.default_config_path:
+            messagebox.showinfo("提示", "当前已是默认配置", parent=self)
+            return
+        if messagebox.askyesno("确认", "恢复默认配置将丢弃当前修改，是否继续？", parent=self):
+            self._load_from_file(self.default_config_path)
+            self._log("[配置] 已恢复默认配置")
 
 
 # ==================== 脚本元数据编辑器 ====================
@@ -1910,7 +2230,7 @@ class ScriptMetaEditor(tk.Toplevel):
         self._script_hash = self._calc_file_hash()
         self.title(f"脚本信息 - {script_name}")
         self.configure(bg=COLORS["bg"])
-        self.geometry("420x540")
+        self.geometry("520x580")
         self.resizable(False, False)
         self.transient(parent)
         self.grab_set()
@@ -2075,7 +2395,6 @@ class ScriptMetaEditor(tk.Toplevel):
 
     def _load_meta(self):
         """加载元数据：先按hash全局搜索，再按文件名查找"""
-        import json
         # 优先按hash查找（支持文件名不同但内容相同的脚本）
         if self._script_hash:
             for fname in os.listdir(SCRIPT_META_DIR):
@@ -2112,7 +2431,6 @@ class ScriptMetaEditor(tk.Toplevel):
             self.update_listbox.insert(tk.END, u)
 
     def _save(self):
-        import json
         data = {
             "script": self.script_name,
             "file_hash": self._script_hash,

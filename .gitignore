@@ -22,3 +22,6 @@ game_monitor_recovered.py
 logs/
 SMD配置/
 异常/
+main_jadeview.py
+一键打包-fix.bat
+web/

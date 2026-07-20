@@ -1020,7 +1020,7 @@ class FrequencyAnalyzer:
 
         # DEBUG: 输出所有策略样本库的详细信息
         logging.debug("[analyze] ===== 样本库详情 =====")
-        for strategy_key, samples in self.strategy_samples.items():
+        for strategy_key, samples in list(self.strategy_samples.items()):
             if not samples:
                 continue
             sname = strategies.get(strategy_key, {}).get('name', strategy_key)
@@ -1033,7 +1033,7 @@ class FrequencyAnalyzer:
             logging.debug(f"[analyze] 策略 '{sname}' [{strategy_key}] 样本数={len(samples)} min={s_min} {'跳过' if skip else '分析中'} | Top: {top5_str}")
         logging.debug("[analyze] =========================")
 
-        for strategy_key, samples in self.strategy_samples.items():
+        for strategy_key, samples in list(self.strategy_samples.items()):
             if strategy_key == '_unmatched':
                 continue
             strategy = strategies.get(strategy_key, {})
@@ -1400,7 +1400,7 @@ class StrategyEngine:
         self.screen_capture = screen_capture
         self.ocr_engine = ocr_engine
         self.adaptive_tuner = adaptive_tuner
-        self.VERSION = getattr(config, '_version', '1.1.0')
+        self.VERSION = getattr(config, '_version', '2.1.0')
         self.last_trigger_time = 0
         self.last_alert_time = 0
         self.trigger_history = []
@@ -2133,7 +2133,7 @@ class GameMonitor:
         self.strategy_engine = StrategyEngine(self.config, self.executor, self.frequency_analyzer,
                                                self.screen_capture, self.ocr_engine,
                                                adaptive_tuner=self.adaptive_tuner)
-        self.config._version = getattr(self, 'VERSION', '1.1.0')
+        self.config._version = getattr(self, 'VERSION', '2.1.0')
         self.strategy_engine.VERSION = self.config._version
         self.strategy_engine._game_monitor = self  # 引用，用于获取轮数等数据
         self.running = False
@@ -2240,9 +2240,8 @@ class GameMonitor:
 
     def stop(self):
         self.running = False
-        # 停止重启流程（如果正在进行）
-        if hasattr(self, 'restarter') and self.restarter:
-            self.restarter.stop_restart()
+        # 注意：不在此处停止重启流程，避免监控循环退出时与重启流程互相干扰
+        # 重启流程中会直接设置 running=False，不需要通过 stop() 间接停止重启
         logging.info("[GameMonitor] stop() 已调用，running=False")
 
     def pause(self):
@@ -2327,6 +2326,7 @@ class GameMonitor:
                         stop_reason = f'总轮数达到{max_rounds}轮'
                     # 条件4: 执行次数
                     max_execs = idle_cfg.get('stop_after_executions', 0)
+                    stats = self.get_stats()
                     total_execs = stats.get('total_triggers', 0)
                     if not should_stop and max_execs > 0 and total_execs >= max_execs:
                         should_stop = True
@@ -2575,7 +2575,15 @@ class GameRestarter:
         # 加载已保存的配置截图
         self._load_saved_configs()
         # 当前使用的SMD配置文件路径（可由主界面动态更新）
-        self.smd_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        # 优先 exe 同级目录（用户数据），回退到 _internal
+        if getattr(sys, 'frozen', False):
+            _user_dir = os.path.dirname(sys.executable)
+            _user_path = os.path.join(_user_dir, 'smd_config', 'smd_settings.json')
+            _internal_path = os.path.join(getattr(sys, '_MEIPASS', os.path.join(_user_dir, '_internal')),
+                                          'smd_config', 'smd_settings.json')
+            self.smd_config_path = _user_path if os.path.isfile(_user_path) else _internal_path
+        else:
+            self.smd_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
         # GUI当前选定的脚本（由主界面在启动重启前设置，特殊操作优先使用）
         self._gui_selected_script = ''
         self._gui_script_type = ''
@@ -2778,14 +2786,15 @@ class GameRestarter:
                 ('阶段3: 启动游戏', self._phase_launch_game),
                 ('阶段4: 等待原力加载', self._phase_wait_game_ready),
                 ('阶段5+6: 进入游戏+恢复配置', self._phase_enter_game),
-                ('阶段7: 恢复监控', self._phase_resume_monitor),
+                ('阶段7: 启动脚本', self._phase_start_script),
+                ('阶段8: 恢复监控', self._phase_resume_monitor),
             ]
 
             phase_max_retries = 3  # 每个阶段最大重试次数
 
             for i, (phase_name, phase_func) in enumerate(phases):
                 # 手动一键重启时跳过停止/恢复监控阶段
-                if not self._auto_restart and i in (0, 6):
+                if not self._auto_restart and i in (0, 7):
                     logging.info(f"[重启] 跳过 {phase_name}（手动重启不恢复监控）")
                     continue
                 if self._stop_requested:
@@ -2827,6 +2836,24 @@ class GameRestarter:
         finally:
             self._is_restarting = False
             self._stop_requested = False
+            # 通知GUI：重启流程结束，如果监控未恢复则需要更新UI
+            if self.tk_root and self.tk_root.winfo_exists():
+                def _notify_gui():
+                    try:
+                        gui = getattr(self.tk_root, '_gui_ref', None)
+                        if not gui and hasattr(self.tk_root, 'master'):
+                            gui = getattr(self.tk_root.master, '_gui_ref', None)
+                        if gui and not (self.game_monitor and self.game_monitor.running):
+                            # 重启中止/失败，监控未恢复，需要更新UI为已停止
+                            gui.monitor_running = False
+                            gui.status_var.set("监控已停止")
+                            gui.start_btn.config(state=tk.NORMAL)
+                            gui.stop_btn.config(state=tk.DISABLED)
+                            gui.floating_window.hide()
+                            gui._log("[重启] 重启流程已结束，监控未恢复")
+                    except Exception:
+                        pass
+                self.tk_root.after(100, _notify_gui)
             # 3秒后隐藏toast
             time.sleep(3)
             self.hide_toast()
@@ -2871,7 +2898,7 @@ class GameRestarter:
     def _phase_stop_monitor(self):
         """阶段0: 停止当前监控"""
         logging.info("[重启] 阶段0: 停止监控")
-        self.show_toast_log("停止监控")
+        self.show_toast_log("[重启] 阶段0: 停止监控")
         if self.game_monitor:
             self.game_monitor.running = False
             self.game_monitor.paused = False
@@ -2880,7 +2907,7 @@ class GameRestarter:
     def _phase_kill_processes(self):
         """阶段1: 强制关闭游戏和rundll32进程"""
         logging.info("[重启] 阶段1: 关闭游戏和rundll32")
-        self.show_toast_log("关闭游戏和rundll32")
+        self.show_toast_log("[重启] 阶段1: 关闭游戏和rundll32")
         import subprocess
 
         # 强制结束游戏进程
@@ -2951,7 +2978,7 @@ class GameRestarter:
     def _phase_start_rundll32(self):
         """阶段2: 启动rundll32，如果启动后进程消失则重试"""
         logging.info("[重启] 阶段2: 启动原力")
-        self.show_toast_log("启动原力")
+        self.show_toast_log("[重启] 阶段2: 启动原力")
         bat_path = self.restart_config.get('bat_path', '')
         if not bat_path or not os.path.isfile(bat_path):
             raise RuntimeError(f"bat文件不存在: {bat_path}")
@@ -2973,7 +3000,7 @@ class GameRestarter:
                 hwnd = self._find_rundll32_window()
                 if hwnd:
                     logging.info("[重启] 原力窗口已出现")
-                    self.show_toast_log("原力窗口已出现")
+                    # self.show_toast_log("原力窗口已出现")
                     found = True
                     break
                 # 窗口没找到，检查进程是否还在
@@ -2996,6 +3023,8 @@ class GameRestarter:
     def _phase_launch_game(self):
         """阶段3: 第一次播放 → 启动游戏 → 等logo过 → 第二次播放注入"""
         logging.info("[重启] 阶段3: 启动游戏并注入原力")
+        self.show_toast_log("[重启] 阶段3: 启动游戏并注入原力")
+
 
         # ===== 第一次播放（游戏启动前） =====
         hwnd = self._find_rundll32_window()
@@ -3013,7 +3042,7 @@ class GameRestarter:
                 logging.error("[重启] 第一次播放: 未能找到播放按钮")
                 return False
             logging.info("[重启] 第一次播放: 已点击'播放'按钮")
-            self.show_toast_log("已点击播放（第一次）")
+            self.show_toast_log("[重启] 阶段3: a.已第一次点击'播放'按钮")
 
         # 等待提示变为"等待歌曲启动后点击"
         if wait_text:
@@ -3034,7 +3063,7 @@ class GameRestarter:
                 else:
                     logging.warning(f"[重启] 快捷方式无效: {game_shortcut}")
                 logging.info(f"[重启] 已启动游戏: {game_shortcut}")
-                self.show_toast_log(f"游戏已启动: {game_shortcut}")
+                self.show_toast_log(f"[重启] 阶段3: b.已启动游戏: {game_shortcut}")
             except Exception as e:
                 logging.error(f"[重启] 启动游戏失败: {e}")
 
@@ -3067,7 +3096,7 @@ class GameRestarter:
                 style = ctypes.windll.user32.GetWindowLongW(game_hwnd, GWL_STYLE)
                 if style & WS_CAPTION:
                     logging.info(f"[重启] 检测到窗口标题栏(logo已过)，耗时{int(time.time()-start)}秒")
-                    self.show_toast_log(f"logo已过，耗时{int(time.time()-start)}秒")
+                    self.show_toast_log(f"[重启] 阶段3: c.游戏logo已过，耗时{int(time.time()-start)}秒")
                     logo_done = True
                     break
             time.sleep(2)
@@ -3132,6 +3161,7 @@ class GameRestarter:
             hwnd = self._find_rundll32_window()
             if not hwnd:
                 logging.info("[重启] 第二次播放: 原力窗口已消失，注入完成")
+
                 break
             self._activate_window(hwnd)
             time.sleep(0.5)
@@ -3141,7 +3171,7 @@ class GameRestarter:
                     time.sleep(3)
                     continue
                 logging.info(f"[重启] 第二次播放(第{inject_attempt}次): 已点击播放，等待注入...")
-                self.show_toast_log(f"已点击播放（第二次，第{inject_attempt}次）")
+                self.show_toast_log(f"[重启] 阶段3: d.已点击播放（第二次，总尝试{inject_attempt}次）")
 
             # 点击后等待界面消失（注入成功的标志）
             inject_start = time.time()
@@ -3151,7 +3181,7 @@ class GameRestarter:
                 if not self._find_rundll32_window():
                     elapsed = int(time.time() - inject_start)
                     logging.info(f"[重启] 第二次播放: 注入成功，界面消失（{elapsed}秒）")
-                    self.show_toast_log(f"注入成功（{elapsed}秒）")
+                    # self.show_toast_log(f"注入成功（{elapsed}秒）")
                     break
                 time.sleep(2)
             else:
@@ -3167,12 +3197,13 @@ class GameRestarter:
             if game_hwnd:
                 self._activate_window(game_hwnd)
                 logging.info("[重启] 已前显游戏窗口")
-                self.show_toast_log("已前显游戏窗口")
+                # self.show_toast_log("已前显游戏窗口")
         return True
 
     def _phase_wait_game_ready(self):
         """阶段4: 等待原力加载成功（游戏左侧出现红色浮动信息）"""
         logging.info("[重启] 阶段4: 等待原力浮动信息")
+        self.show_toast_log("[重启] 阶段4: 等待原力浮动信息")
         game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
         if not game_title:
             return
@@ -3203,7 +3234,7 @@ class GameRestarter:
                     if any(kw in text for kw in float_keywords):
                         elapsed = int(time.time() - start)
                         logging.info(f"[重启] 检测到原力浮动信息（{elapsed}秒）")
-                        self.show_toast_log(f"检测到原力浮动信息（{elapsed}秒）")
+                        self.show_toast_log(f"[重启] 阶段4: 检测到原力浮动信息（{elapsed}秒）")
                         ready = True
                         break
             except Exception:
@@ -3216,6 +3247,7 @@ class GameRestarter:
     def _phase_enter_game(self):
         """阶段5+6: 按空格进入游戏 → 按M确认地图 → 恢复原力配置 → 失败则整体重试"""
         logging.info("[重启] 阶段5: 按空格进入游戏")
+        self.show_toast_log("[重启] 阶段5: 按空格进入游戏")
         game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
         if not game_title:
             return
@@ -3234,15 +3266,10 @@ class GameRestarter:
             time.sleep(0.5)
             self._send_key('space', presses=1)
             logging.info(f"[重启] 第{attempt}次按空格")
-            self.show_toast_log(f"第{attempt}次按空格")
+            self.show_toast_log(f"[重启] 阶段5: 第{attempt}次按空格")
             time.sleep(8)  # 等待进入游戏或出现加载界面
 
-            # 检查是否还在加载界面（有"下一个提示"等文字说明还在加载）
-            if self._check_in_menu(game_title):
-                logging.info(f"[重启] 仍在主菜单/加载界面，继续按空格")
-                continue
-
-            # 不在主菜单了，按M打开地图确认
+            # 不确定是否进入游戏,按M打开地图确认
             logging.info("[重启] 按M打开地图确认...")
             self._activate_window(hwnd)
             time.sleep(0.5)
@@ -3252,23 +3279,26 @@ class GameRestarter:
             # OCR检测地图是否打开
             map_opened = self._check_map_open(game_title)
             if not map_opened:
-                logging.info("[重启] 地图未打开，关闭可能打开的地图后重试")
+                logging.info("[重启] 地图未打开，继续主菜单检测")
+                # self._send_key('m', presses=1)
+                # time.sleep(1)
+                # 检查是否还在加载界面（有"下一个提示"等文字说明还在加载）
+                if self._check_in_menu(game_title):
+                    logging.info(f"[重启] 仍在主菜单/加载界面，继续按空格")
+                    continue
+            else:
+                logging.info("[重启] 地图已打开，确认进入游戏（保持地图以显示光标）")
+                self.show_toast_log("[重启] 阶段5: 地图已打开")
+
+                # 阶段6: 恢复原力配置
+                self._phase_restore_config_inner(game_title)
+
+                # 配置完成后关闭地图
                 self._send_key('m', presses=1)
+                logging.info("[重启] 已按M关闭地图")
+                self.show_toast_log("[重启] 阶段5: 关闭地图")
                 time.sleep(1)
-                continue
-
-            logging.info("[重启] 地图已打开，确认进入游戏（保持地图以显示光标）")
-            self.show_toast_log("地图已打开")
-
-            # 阶段6: 恢复原力配置
-            self._phase_restore_config_inner(game_title)
-
-            # 配置完成后关闭地图
-            self._send_key('m', presses=1)
-            logging.info("[重启] 已按M关闭地图")
-            self.show_toast_log("关闭地图")
-            time.sleep(1)
-            return True
+                return True
 
         logging.warning("[重启] 多次尝试后仍未完成，继续后续流程")
         return False
@@ -3314,6 +3344,7 @@ class GameRestarter:
     def _phase_restore_config(self):
         """阶段6: F11打开原力配置界面 → 按SMD配置设置参数 → F11关闭"""
         logging.info("[重启] 阶段6: 恢复原力配置")
+        self.show_toast_log("[重启] 阶段6: 恢复原力配置")
         game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
         if not game_title:
             return False
@@ -3343,7 +3374,7 @@ class GameRestarter:
         time.sleep(0.5)
         self._send_key('f11', presses=1)
         logging.info("[重启] 已按F11打开原力配置")
-        self.show_toast_log("打开原力配置")
+        self.show_toast_log("[重启] 阶段6: 打开原力配置")
         time.sleep(3)
 
         # 遍历每个标签页的设定参数
@@ -3367,11 +3398,45 @@ class GameRestarter:
                     break
                 if tab_attempt > 0:
                     logging.info(f"[重启] 标签 '{tab_name}' 第{tab_attempt}次重试...")
-                    self.show_toast_log(f"标签重试: {tab_name} ({tab_attempt}/{self._tab_retry_count})")
+                    self.show_toast_log(f"[重启] 阶段6: 标签重试: {tab_name} ({tab_attempt}/{self._tab_retry_count})")
+
+                    # 重试前检查地图是否仍打开（可能受攻击导致界面关闭）
+                    self._invalidate_ocr_cache()
+                    if not self._check_map_open(game_title):
+                        logging.warning("[重启] 地图已关闭，受攻击导致界面丢失，重新打开地图...")
+                        self.show_toast_log("[重启] 阶段6: 地图关闭，重新打开...")
+                        self._activate_window(hwnd)
+                        time.sleep(0.3)
+                        # 1. F11关闭原力界面（确保关闭）
+                        self._send_key('f11', presses=1)
+                        time.sleep(0.5)
+                        # 2. F7
+                        self._send_key('f7', presses=1)
+                        time.sleep(0.5)
+                        # 3. 鼠标左键按下5秒
+                        ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                        time.sleep(5)
+                        ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                        time.sleep(0.5)
+                        # 4. 重新按M打开地图
+                        self._send_key('m', presses=1)
+                        time.sleep(2)
+                        # 5. 等待确认地图打开
+                        map_ok = False
+                        for _ in range(5):
+                            if self._check_map_open(game_title):
+                                map_ok = True
+                                break
+                            time.sleep(1)
+                        if not map_ok:
+                            logging.warning("[重启] 重新打开地图失败，继续尝试恢复配置...")
+                        else:
+                            logging.info("[重启] 地图已重新打开")
+                            self.show_toast_log("[重启] 阶段6: 地图已重新打开")
 
                 # 先点击标签切换到对应页面
                 logging.info(f"[重启] 切换到标签: {tab_name}")
-                self.show_toast_log(f"切换到标签: {tab_name}")
+                self.show_toast_log(f"[重启] 阶段6: 切换到标签: {tab_name}")
                 self._activate_window(hwnd)
                 time.sleep(0.3)
                 if not self._click_ocr_in_game(hwnd, tab_name):
@@ -3427,7 +3492,7 @@ class GameRestarter:
         time.sleep(1)
         self._send_key('f11', presses=1)
         logging.info("[重启] 已按F11关闭原力配置")
-        self.show_toast_log("原力配置已恢复")
+        self.show_toast_log("[重启] 阶段6: 原力配置已恢复")
         time.sleep(1)
         return True
 
@@ -3584,6 +3649,8 @@ class GameRestarter:
         item_type = item.get('item_type', 'toggle')
         target_value = item.get('target_value', '')
         method = item.get('value_set_method', 'click')
+        offset_x = int(item.get('offset_x', 0) or 0)
+        offset_y = int(item.get('offset_y', 0) or 0)
 
         if not ocr_label:
             return True
@@ -3627,8 +3694,8 @@ class GameRestarter:
                         # 原力界面布局: [当前值文本 | ▼] ... 标题文字
                         char_count = len(ocr_label)
                         text_half_width = int(char_count / 2 * 15)
-                        arrow_x = max(0, title_pos[0] - text_half_width - 50)
-                        arrow_y = title_pos[1] + 10
+                        arrow_x = max(0, title_pos[0] - text_half_width - 50 - offset_x)
+                        arrow_y = title_pos[1] + 10 + offset_y
                         abs_x = rect.left + arrow_x
                         abs_y = rect.top + arrow_y
                         logging.info(f"[重启] 下拉框: 点击固定偏移箭头位置 ({arrow_x}, {arrow_y})")
@@ -3693,10 +3760,10 @@ class GameRestarter:
                         text_half_width = int(char_count / 2 * 15)
                         switch_width = 50
                         switch_height = 30
-                        scan_left = max(0, label_pos[0] - text_half_width - switch_width)
-                        scan_right = max(0, label_pos[0] - text_half_width - 10)
-                        scan_top = max(0, label_pos[1] - switch_height // 2)
-                        scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2)
+                        scan_left = max(0, label_pos[0] - text_half_width - switch_width - offset_x)
+                        scan_right = max(0, label_pos[0] - text_half_width - 10 - offset_x)
+                        scan_top = max(0, label_pos[1] - switch_height // 2 + offset_y)
+                        scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2 + offset_y)
                         if scan_left < scan_right and scan_top < scan_bottom:
                             scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
                             # 找蓝色像素（B>80, B>G+20, B>R+20）
@@ -3772,10 +3839,10 @@ class GameRestarter:
                         text_half_width = int(char_count / 2 * 15)
                         box_width = 30
                         box_height = 30
-                        scan_left = max(0, label_pos[0] - text_half_width - box_width - 10)
-                        scan_right = max(0, label_pos[0] - text_half_width - 5)
-                        scan_top = max(0, label_pos[1] - box_height // 2)
-                        scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2)
+                        scan_left = max(0, label_pos[0] - text_half_width - box_width - 10 - offset_x)
+                        scan_right = max(0, label_pos[0] - text_half_width - 5 - offset_x)
+                        scan_top = max(0, label_pos[1] - box_height // 2 + offset_y)
+                        scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2 + offset_y)
                         if scan_left < scan_right and scan_top < scan_bottom:
                             scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
                             # 找白色/浅色像素（对勾颜色），对勾通常是白色或浅灰色
@@ -3845,8 +3912,8 @@ class GameRestarter:
                     text_half_width = int(char_count / 2 * 15)
                     input_width = 100
 
-                    click_left = max(0, ctrl_pos[0] - text_half_width - input_width)
-                    click_top = max(0, ctrl_pos[1])
+                    click_left = max(0, ctrl_pos[0] - text_half_width - input_width - offset_x)
+                    click_top = max(0, ctrl_pos[1] + offset_y)
                     abs_x = rect.left + click_left
                     abs_y = rect.top + click_top
 
@@ -3936,7 +4003,7 @@ class GameRestarter:
                     current_value = None
                     value_pos = None
                     for ocr_text, cx, cy in items:
-                        if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
+                        if abs(cy - label_pos[1] - offset_y) < 10 and cx > label_pos[0] + offset_x and cx - label_pos[0] < 100 + offset_x:
                             if any(c.isdigit() or c == '.' for c in ocr_text):
                                 current_value = ocr_text
                                 value_pos = (cx, cy)
@@ -3946,7 +4013,7 @@ class GameRestarter:
                     img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.right, rect.bottom))
 
                     # 3. 找圆形滑块位置（同行、在数值右侧、通过区域采样白色像素检测）
-                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_h, current_value)
+                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_h, current_value, offset_x, offset_y)
 
                     if thumb_pos and current_value and target_value:
                         try:
@@ -4127,9 +4194,9 @@ class GameRestarter:
             logging.warning(f"[重启] 特殊操作失败（已重试{retry_count}次）")
             return False
 
-    def _find_slider_thumb(self, img, value_pos, label_pos, win_h, current_value=None):
+    def _find_slider_thumb(self, img, value_pos, label_pos, win_h, current_value=None, offset_x=0, offset_y=0):
         """在截图上找圆形滑块位置（白色圆形，在数值右侧）
-        搜索范围：数值x坐标 + 字符长度*10/2 起，宽130像素，y±15像素
+        搜索范围：数值x坐标 + 字符长度*10/2 + offset_x 起，宽130像素，y±15+offset_y
         使用区域采样白色像素密度找滑块中心，避免和文字混淆
         返回 (x, y) 绝对窗口内坐标，或 None
         """
@@ -4140,10 +4207,10 @@ class GameRestarter:
 
         # 搜索范围：数值右侧
         char_len = len(current_value) if current_value else 3
-        search_left = int(value_pos[0] + char_len * 10 / 2)
+        search_left = int(value_pos[0] + char_len * 10 / 2 + offset_x)
         search_right = search_left + 130
-        search_top = max(0, value_pos[1] - 15)
-        search_bottom = min(win_h, value_pos[1] + 15)
+        search_top = max(0, value_pos[1] - 15 + offset_y)
+        search_bottom = min(win_h, value_pos[1] + 15 + offset_y)
 
         if search_left >= search_right or search_top >= search_bottom:
             return None
@@ -4233,6 +4300,87 @@ class GameRestarter:
         ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE, 0)
         time.sleep(0.02)
         ctypes.windll.user32.keybd_event(0, vk, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP, 0)
+
+    def _phase_start_script(self):
+        """阶段7: 检测游戏左上角是否有'悬赏执行[0]'，没有则按P键启动脚本"""
+        logging.info("[重启] 阶段7: 检测脚本是否启动")
+        self.show_toast_log("检测脚本状态...")
+        game_title = self.restart_config.get('game_title', '') or self.config.window.get('title', '')
+        if not game_title:
+            logging.warning("[重启] 阶段7: 未配置游戏窗口标题，跳过")
+            return True
+
+        max_retries = 5
+        for attempt in range(1, max_retries + 1):
+            if self._stop_requested:
+                return
+
+            hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
+            if not hwnd:
+                logging.warning(f"[重启] 阶段7: 未找到游戏窗口，等待...")
+                time.sleep(3)
+                continue
+
+            # 截图OCR检测左上角区域
+            try:
+                from PIL import ImageGrab
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                # 只截取左上角区域（脚本状态文字通常在这里）
+                scan_w = min(380, rect.right - rect.left)
+                scan_h = min(270, rect.bottom - rect.top)
+                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.left + scan_w, rect.top + scan_h))
+
+                if self.game_monitor and self.game_monitor.ocr_engine:
+                    text = self.game_monitor.ocr_engine.recognize(img)
+                    logging.info(f"[重启] 阶段7: 左上角OCR='{text.strip()[:80]}'")
+
+                    # 检测"悬赏执行"关键字（OCR可能识别为相近文字）
+                    import re
+                    # 匹配 "悬赏执行[0]" 或 "循环执行[0]" 等类似模式
+                    if re.search(r'悬赏执行|循环执行', text):
+                        logging.info("[重启] 阶段7: 脚本已启动，检测到执行状态")
+                        self.show_toast_log("脚本已启动")
+                        return True
+            except Exception as e:
+                logging.warning(f"[重启] 阶段7: OCR检测失败: {e}")
+
+            # 未检测到脚本执行，按P键启动
+            if attempt == 1:
+                logging.info("[重启] 阶段7: 未检测到脚本执行，按P键启动")
+                self.show_toast_log("按P键启动脚本")
+            elif attempt > 1:
+                logging.info(f"[重启] 阶段7: 仍未检测到，再次按P (第{attempt}次)")
+                self.show_toast_log(f"再次按P ({attempt})")
+
+            self._activate_window(hwnd)
+            time.sleep(0.3)
+            self._send_key('p', presses=1)
+            time.sleep(5)  # 等待脚本启动后UI刷新
+
+        # 最终一次检测
+        try:
+            from PIL import ImageGrab
+            hwnd = ctypes.windll.user32.FindWindowW(None, game_title)
+            if hwnd:
+                rect = ctypes.wintypes.RECT()
+                ctypes.windll.user32.GetWindowRect(hwnd, ctypes.byref(rect))
+                scan_w = min(300, rect.right - rect.left)
+                scan_h = min(60, rect.bottom - rect.top)
+                img = ImageGrab.grab(bbox=(rect.left, rect.top, rect.left + scan_w, rect.top + scan_h))
+                if self.game_monitor and self.game_monitor.ocr_engine:
+                    text = self.game_monitor.ocr_engine.recognize(img)
+                    import re
+                    if re.search(r'悬赏执行|循环执行', text):
+                        logging.info("[重启] 阶段7: 最终确认脚本已启动")
+                        self.show_toast_log("脚本已启动")
+                        return True
+        except Exception:
+            pass
+
+        logging.warning("[重启] 阶段7: 多次尝试后仍未检测到脚本启动，继续后续流程")
+        self.show_toast_log("脚本启动检测超时，继续")
+        return True  # 不阻塞后续流程
 
     def _phase_resume_monitor(self):
         """恢复监控（在新线程中启动，避免阻塞重启线程导致toast无法退出）"""

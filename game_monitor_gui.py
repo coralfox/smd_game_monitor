@@ -941,19 +941,17 @@ class FloatingStatsWindow:
         tk.Label(self.content, text='关键日志', font=('微软雅黑', 10, 'bold'),
                  fg='#ff9f43', bg='#1a1a2e').pack(anchor='w')
 
-        # 日志区域（带横向滚动条，不换行，完整显示）
+        # 日志区域（自动换行，最多2行显示，过长时自动缩小字体）
         log_frame = tk.Frame(self.content, bg='#1a1a2e')
         log_frame.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
 
-        self.log_text = tk.Text(log_frame, height=5, width=42, font=('Consolas', 9),
-                                bg='#16213e', fg='#ccc', wrap=tk.NONE,
+        self._log_font_size = 9
+        self._log_min_font_size = 7
+        self.log_text = tk.Text(log_frame, height=2, width=42,
+                                font=('Consolas', self._log_font_size),
+                                bg='#16213e', fg='#ccc', wrap=tk.WORD,
                                 state=tk.DISABLED, relief=tk.SOLID, bd=1)
         self.log_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        h_scroll = tk.Scrollbar(log_frame, orient=tk.HORIZONTAL, command=self.log_text.xview,
-                                bg='#1a1a2e', troughcolor='#1a1a2e', highlightthickness=0)
-        h_scroll.pack(side=tk.BOTTOM, fill=tk.X)
-        self.log_text.config(xscrollcommand=h_scroll.set)
 
         self._position_window()
         self._schedule_update()
@@ -1120,6 +1118,8 @@ class FloatingStatsWindow:
                     self.log_text.insert(tk.END, msg + '\n')
             else:
                 self.log_text.insert(tk.END, '暂无关键日志\n')
+            # 自适应字体：从当前字号开始，如果超过2行就缩小
+            self._adjust_log_font()
             self.log_text.config(state=tk.DISABLED)
 
         # 跟随游戏窗口位置（仅在位置变化时才更新）
@@ -1133,6 +1133,16 @@ class FloatingStatsWindow:
             cur_y = self.window.winfo_y()
             if abs(cur_x - target_x) > 5 or abs(cur_y - target_y) > 5:
                 self.window.geometry(f'+{target_x}+{target_y}')
+
+    def _adjust_log_font(self):
+        """自适应日志字体大小：从默认字号递减，直到内容不超过2行"""
+        size = self._log_font_size
+        while size > self._log_min_font_size:
+            self.log_text.config(font=('Consolas', size))
+            line_count = int(self.log_text.index('end-1c').split('.')[0])
+            if line_count <= 2:
+                break
+            size -= 1
 
     def _get_game_hwnd(self):
         """获取游戏窗口hwnd"""
@@ -1151,7 +1161,7 @@ class FloatingStatsWindow:
 class GameMonitorGUI:
     """游戏监控GUI主界面"""
 
-    VERSION = "2.0.0"
+    VERSION = "2.1.0"
     AUTHOR = "重楼一叶"
     PAN_LINK = "https://qj2smd.ysepan.com/"
     PAN_PASSWORD = "1234"
@@ -1180,6 +1190,13 @@ class GameMonitorGUI:
             self.app_dir = os.path.dirname(sys.executable)
         else:
             self.app_dir = os.path.dirname(os.path.abspath(__file__))
+
+        # SMD配置目录
+        # 保存/列表：始终使用 app_dir/smd_config（exe同级，用户可写）
+        # 读取默认配置：app_dir 优先，回退到 _internal
+        self.smd_config_dir = os.path.join(self.app_dir, 'smd_config')
+        os.makedirs(self.smd_config_dir, exist_ok=True)
+
         self.configs_dir = os.path.join(self.app_dir, 'configs')
         os.makedirs(self.configs_dir, exist_ok=True)
         # 上次使用的配置记录
@@ -1968,12 +1985,12 @@ class GameMonitorGUI:
         """获取当前选中的SMD配置文件路径，默认 smd_settings.json"""
         sel = self.smd_config_file_var.get()
         if sel:
-            return os.path.join(self.app_dir, 'smd_config', sel)
-        return os.path.join(self.app_dir, 'smd_config', 'smd_settings.json')
+            return os.path.join(self.smd_config_dir, sel)
+        return os.path.join(self.smd_config_dir, 'smd_settings.json')
 
     def _refresh_smd_config_files(self):
         """刷新SMD配置文件下拉列表（隐藏默认的 smd_settings.json）"""
-        smd_dir = os.path.join(self.app_dir, 'smd_config')
+        smd_dir = self.smd_config_dir
         files = []
         if os.path.isdir(smd_dir):
             try:
@@ -2144,6 +2161,8 @@ class GameMonitorGUI:
             from game_monitor import GameMonitor
             self.game_monitor = GameMonitor(self.config_path)
             self.game_monitor.tk_root = self.root
+            self.root._gui_ref = self
+            self.root._gui_ref = self
         gm = self.game_monitor
 
         if not hasattr(gm, 'restarter') or gm.restarter is None:
@@ -2198,6 +2217,7 @@ class GameMonitorGUI:
             from game_monitor import GameMonitor
             self.game_monitor = GameMonitor(self.config_path)
             self.game_monitor.tk_root = self.root
+            self.root._gui_ref = self
         gm = self.game_monitor
         if not hasattr(gm, 'restarter') or gm.restarter is None:
             gm.restarter = GameRestarter(restart_cfg, gm, tk_root=self.root)
@@ -3520,8 +3540,10 @@ class GameMonitorGUI:
         self.monitor_thread.start()
 
     def _stop_monitor(self, emergency=False):
-        # 先立即停止监控循环（线程安全，可在任意线程调用）
+        # 用户主动停止：同时停止监控和重启流程
         if self.game_monitor:
+            if hasattr(self.game_monitor, 'restarter') and self.game_monitor.restarter:
+                self.game_monitor.restarter.stop_restart()
             self.game_monitor.stop()
         # Tk操作放到主线程
         self.root.after(0, lambda: self._stop_monitor_ui(emergency))
@@ -3680,6 +3702,7 @@ class GameMonitorGUI:
         try:
             self.game_monitor = GameMonitor(self.config_path)
             self.game_monitor.tk_root = self.root
+            self.root._gui_ref = self
             self._setup_gui_logging()
             self.game_monitor.start()
             # 同步GUI选定的SMD配置文件路径到restarter
@@ -3699,7 +3722,16 @@ class GameMonitorGUI:
             except Exception:
                 pass
             self._log(error_msg)
-        self.root.after(0, self._stop_monitor)
+        self.root.after(0, self._on_monitor_loop_exited)
+
+    def _on_monitor_loop_exited(self):
+        """监控循环退出后的处理：区分用户手动停止 vs 重启流程中的正常退出"""
+        # 如果重启流程正在进行，只切UI到"等待重启"，不调用 stop()
+        if self.game_monitor and self.game_monitor.restarter and self.game_monitor.restarter._is_restarting:
+            self.status_var.set("等待重启中...")
+            self._log("[监控] 监控循环已退出，等待重启流程完成")
+            return
+        self._stop_monitor()
 
     def _setup_gui_logging(self):
         # 避免重复添加GUI handler

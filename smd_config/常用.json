@@ -18,7 +18,9 @@
         "ocr_label": "开启全局",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       }
     ],
     "extra": {}
@@ -30,7 +32,9 @@
         "ocr_label": "加载基础参数",
         "item_type": "action",
         "target_value": "",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       }
     ],
     "extra": {}
@@ -54,105 +58,135 @@
         "ocr_label": "载入",
         "item_type": "action",
         "target_value": "",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "无动作拾取",
         "ocr_label": "无动作分解捡起",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "筛选规则选择",
         "ocr_label": "自动动作",
         "item_type": "dropdown",
         "target_value": "拾取筛选物资其余分解",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选显示",
         "ocr_label": "显示",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "切换到仓库",
         "ocr_label": "仓库",
         "item_type": "action",
         "target_value": "",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-枪械",
         "ocr_label": "背-枪械",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-面具",
         "ocr_label": "背-面具",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-背包",
         "ocr_label": "背-背包",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-胸甲",
         "ocr_label": "背-胸甲",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-手套",
         "ocr_label": "背-手套",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-枪套",
         "ocr_label": "背-抢套",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-护膝",
         "ocr_label": "背-护膝",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-分解-协插",
         "ocr_label": "背-协插",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-自动分解背包",
         "ocr_label": "自动分解背包",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "勾选-自动分解精英图鉴",
         "ocr_label": "自动分解精英图鉴",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       }
     ],
     "extra": {}
@@ -164,119 +198,151 @@
         "ocr_label": "脚本信息加载",
         "item_type": "action",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "编辑当前脚本",
         "ocr_label": "编辑当前脚本",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "刷新脚本文件",
         "ocr_label": "刷新脚本文件",
         "item_type": "action",
         "target_value": "",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "选定脚本",
         "ocr_label": "脚本信息加载",
         "item_type": "special",
         "target_value": "",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "加载选定",
         "ocr_label": "加载选定",
         "item_type": "action",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "挂机自定义",
         "ocr_label": "挂机自定义",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "无敌",
         "ocr_label": "无敌",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "无动作分解",
         "ocr_label": "无动作分解捡起",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "遇怪打",
         "ocr_label": "遇怪打",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "连射",
         "ocr_label": "连射",
         "item_type": "toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "遇到动作停顿",
         "ocr_label": "遇到动作停顿",
         "item_type": "slider",
         "target_value": "0",
-        "value_set_method": "ctrl_click"
+        "value_set_method": "ctrl_click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "按键前摇",
         "ocr_label": "按键前摇",
         "item_type": "slider",
         "target_value": "0",
-        "value_set_method": "ctrl_click"
+        "value_set_method": "ctrl_click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "延迟检测怪",
         "ocr_label": "延迟检测怪",
         "item_type": "slider",
         "target_value": "0",
-        "value_set_method": "ctrl_click"
+        "value_set_method": "ctrl_click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "脚本制作",
         "ocr_label": "脚本制作",
         "item_type": "action",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "显示脚本信息",
         "ocr_label": "显示脚本信息",
         "item_type": "check_toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "滑块粗度",
         "ocr_label": "滑块粗度",
         "item_type": "slider",
         "target_value": "20",
-        "value_set_method": "ctrl_click"
+        "value_set_method": "ctrl_click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       }
     ],
     "extra": {
-      "selected_script": "eh_GHDS_auto_re_t.bin",
+      "selected_script": "eh_LK_auto_re_t.bin",
       "script_type": "恶化",
       "script_selections": {
-        "恶化": "eh_GHDS_auto_re_t.bin",
+        "恶化": "eh_LK_auto_re_t.bin",
         "副本": "fb_KNDQG_auto.bin",
         "支线": "zx_KND.bin",
         "报复": "bf_HSD_auto_t.bin",
@@ -292,21 +358,27 @@
         "ocr_label": "队友无敌",
         "item_type": "check_toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "无动作强化原型",
         "ocr_label": "无动作强化原型",
         "item_type": "check_toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       },
       {
         "name": "无动专精",
         "ocr_label": "无动专精",
         "item_type": "check_toggle",
         "target_value": "开启",
-        "value_set_method": "click"
+        "value_set_method": "click",
+        "click_offset_x": 0,
+        "click_offset_y": 0
       }
     ],
     "extra": {}

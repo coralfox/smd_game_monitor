@@ -5,11 +5,21 @@ SMD 配置设定参数编辑器
 """
 
 import os
+import sys
 import json
 import time
 import tkinter as tk
 import ctypes
 from tkinter import ttk, messagebox
+
+# 基础目录（兼容 PyInstaller 打包）
+if getattr(sys, 'frozen', False):
+    _BASE_DIR = getattr(sys, '_MEIPASS', os.path.join(os.path.dirname(sys.executable), '_internal'))
+else:
+    _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# 用户数据目录（保存配置等可写操作，打包时为 exe 同级目录）
+_DATA_DIR = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.dirname(os.path.abspath(__file__))
 
 # SMD 左侧导航的标签页列表（按顺序）
 SMD_TABS = [
@@ -30,7 +40,6 @@ SMD_TABS = [
 TYPE_MAP = {
     "toggle": "蓝色开关",
     "check_toggle": "勾选开关",
-    "slider": "滑块数值",
     "round_slider": "圆形滑条",
     "text": "文本",
     "dropdown": "下拉选项",
@@ -42,8 +51,7 @@ TYPE_MAP_REVERSE = {v: k for k, v in TYPE_MAP.items()}
 METHOD_MAP = {
     "click": "点击",
     "ctrl_click": "Ctrl+点击",
-    "slider_drag": "滑块拖拽",
-    "round_slider": "滑条点击",
+    "round_slider": "滑块拖拽",
     "special": "特殊操作",
 }
 METHOD_MAP_REVERSE = {v: k for k, v in METHOD_MAP.items()}
@@ -75,12 +83,15 @@ class CompareItem:
     """单个设定参数"""
 
     def __init__(self, name='', ocr_label='', item_type='toggle',
-                 target_value='', value_set_method='click'):
+                 target_value='', value_set_method='click',
+                 offset_x=0, offset_y=0):
         self.name = name
         self.ocr_label = ocr_label
         self.item_type = item_type          # toggle/slider/text/dropdown
         self.target_value = target_value
         self.value_set_method = value_set_method  # click/ctrl_click/slider_drag
+        self.offset_x = int(offset_x or 0)  # 识别范围X偏移(像素)
+        self.offset_y = int(offset_y or 0)  # 识别范围Y偏移(像素)
 
     def to_dict(self):
         return {
@@ -89,6 +100,8 @@ class CompareItem:
             'item_type': self.item_type,
             'target_value': self.target_value,
             'value_set_method': self.value_set_method,
+            'offset_x': self.offset_x,
+            'offset_y': self.offset_y,
         }
 
     @classmethod
@@ -99,6 +112,8 @@ class CompareItem:
             item_type=d.get('item_type', 'toggle'),
             target_value=d.get('target_value', ''),
             value_set_method=d.get('value_set_method', 'click'),
+            offset_x=d.get('offset_x', d.get('click_offset_x', 0)),
+            offset_y=d.get('offset_y', d.get('click_offset_y', 0)),
         )
 
 
@@ -206,8 +221,26 @@ class CompareItemDialog(tk.Toplevel):
                                          font=("Microsoft YaHei UI", 9))
         self.method_combo.grid(row=row, column=1, columnspan=2, sticky=tk.W, pady=pad_y)
 
-        # 按钮区域
+        # 识别范围偏移
         row = 5
+        tk.Label(main_frame, text="识别偏移:", bg=COLORS["bg"], fg=COLORS["label_fg"],
+                 font=("Microsoft YaHei UI", 9)).grid(
+            row=row, column=0, sticky=tk.E, padx=(0, 8), pady=pad_y)
+        offset_frame = tk.Frame(main_frame, bg=COLORS["bg"])
+        offset_frame.grid(row=row, column=1, columnspan=2, sticky=tk.W, pady=pad_y)
+        self.offset_x_var = tk.StringVar(value="0")
+        self.offset_y_var = tk.StringVar(value="0")
+        tk.Label(offset_frame, text="X:", bg=COLORS["bg"], fg=COLORS["label_fg"],
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT)
+        tk.Entry(offset_frame, textvariable=self.offset_x_var, width=6,
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT, padx=(2, 8))
+        tk.Label(offset_frame, text="Y:", bg=COLORS["bg"], fg=COLORS["label_fg"],
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT)
+        tk.Entry(offset_frame, textvariable=self.offset_y_var, width=6,
+                 font=("Microsoft YaHei UI", 9)).pack(side=tk.LEFT, padx=(2, 0))
+
+        # 按钮区域
+        row = 6
         btn_frame = tk.Frame(main_frame, bg=COLORS["bg"])
         btn_frame.grid(row=row, column=0, columnspan=3, pady=(15, 5))
 
@@ -258,6 +291,8 @@ class CompareItemDialog(tk.Toplevel):
         self.type_var.set(TYPE_MAP.get(item.item_type, "开关"))
         self.target_value_var.set(item.target_value)
         self.method_var.set(METHOD_MAP.get(item.value_set_method, "点击"))
+        self.offset_x_var.set(str(item.offset_x))
+        self.offset_y_var.set(str(item.offset_y))
         # 根据类型刷新目标值控件
         self._on_type_changed()
 
@@ -307,6 +342,8 @@ class CompareItemDialog(tk.Toplevel):
             item_type=TYPE_MAP_REVERSE.get(type_cn, "toggle"),
             target_value=self.target_value_var.get().strip(),
             value_set_method=METHOD_MAP_REVERSE.get(method_cn, "click"),
+            offset_x=self.offset_x_var.get().strip(),
+            offset_y=self.offset_y_var.get().strip(),
         )
         self.destroy()
 
@@ -331,8 +368,10 @@ class SMDConfigEditor(tk.Toplevel):
         # GameMonitor 实例引用（用于测试功能）
         self.game_monitor_ref = game_monitor_ref
 
-        # 默认配置文件路径
-        self.default_config_path = os.path.join(os.path.dirname(__file__), 'smd_config', 'smd_settings.json')
+        # 默认配置文件路径（优先用户数据目录，回退到 _internal）
+        _default_user = os.path.join(_DATA_DIR, 'smd_config', 'smd_settings.json')
+        _default_internal = os.path.join(_BASE_DIR, 'smd_config', 'smd_settings.json')
+        self.default_config_path = _default_user if os.path.isfile(_default_user) else _default_internal
         self.config_path = config_path if config_path and os.path.isfile(config_path) else self.default_config_path
 
         # 配置数据结构：{tab_key: {"items": [CompareItem, ...], "extra": {}}}
@@ -649,6 +688,8 @@ class SMDConfigEditor(tk.Toplevel):
             type_cn = TYPE_MAP.get(item.item_type, item.item_type)
             method_cn = METHOD_MAP.get(item.value_set_method, item.value_set_method)
             display = f"{idx + 1}. {item.name}  [{item.target_value}]  {type_cn}({method_cn})"
+            if item.offset_x or item.offset_y:
+                display += f"  识别偏移({item.offset_x},{item.offset_y})"
             self.items_listbox.insert(tk.END, display)
 
         self._refresh_special_actions()
@@ -959,8 +1000,15 @@ class SMDConfigEditor(tk.Toplevel):
             self._log(f"[测试]   窗口尺寸={win_w}x{win_h}, OCR识别到{len(items)}个文本:")
             for i, (text, cx, cy) in enumerate(items):
                 self._log(f"[测试]     [{i}] '{text}' -> 相对窗口=({cx},{cy})")
-
+            # 覆盖层：红色标记目标标签
             norm_label = self._normalize_match_text(ocr_label)
+            for text, cx, cy in items:
+                if norm_label in self._normalize_match_text(text):
+                    self._show_overlay(
+                        [(*self._text_rect(rect, cx, cy, text), '#FF0000', text)],
+                        window_rect=rect)
+                    break
+
             self._log(f"[测试]   搜索目标(规范化): '{norm_label}'")
 
             for text, cx, cy in items:
@@ -993,6 +1041,51 @@ class SMDConfigEditor(tk.Toplevel):
         except Exception as e:
             self._log(f"[测试]   点击异常: {e}")
             return False
+
+    # ==================== OCR 可视化覆盖层 ====================
+
+    def _show_overlay(self, regions, duration=3000, window_rect=None):
+        """在屏幕上用彩色矩形框绘制指定区域，几秒后自动消失
+        Args:
+            regions: [(x1, y1, x2, y2, color, label), ...] 屏幕绝对坐标的区域列表
+                     color: '#FF0000'(红) '#00FF00'(绿) '#00BFFF'(蓝) 等
+            duration: 显示时长(毫秒)，默认3000
+            window_rect: 窗口RECT对象，有则绘制白色虚线窗口边框
+        """
+        try:
+            overlay = tk.Toplevel(self)
+            overlay.overrideredirect(True)
+            overlay.attributes('-topmost', True)
+            overlay.attributes('-alpha', 0.4)
+            sw = overlay.winfo_screenwidth()
+            sh = overlay.winfo_screenheight()
+            overlay.geometry(f"{sw}x{sh}+0+0")
+            canvas = tk.Canvas(overlay, bg='#111111', highlightthickness=0)
+            canvas.pack(fill=tk.BOTH, expand=True)
+
+            # 游戏窗口边框（白色虚线）
+            if window_rect:
+                canvas.create_rectangle(
+                    window_rect.left, window_rect.top, window_rect.right, window_rect.bottom,
+                    outline='#FFFFFF', width=2, dash=(8, 4))
+
+            # 绘制各区域
+            for x1, y1, x2, y2, color, label in regions:
+                lw = 3 if color in ('#FF0000', '#00FF00') else 2
+                canvas.create_rectangle(x1, y1, x2, y2, outline=color, width=lw)
+                if label:
+                    canvas.create_text(x1, y1 - 8, text=label, fill=color,
+                                       font=('Microsoft YaHei', 8), anchor=tk.S)
+
+            overlay.after(duration, overlay.destroy)
+        except Exception:
+            pass
+
+    def _text_rect(self, rect, cx, cy, text, char_w=14, text_h=22):
+        """根据OCR文字中心位置和文字内容，估算屏幕绝对坐标矩形"""
+        w = max(len(text) * char_w, 30)
+        return (rect.left + cx - w // 2, rect.top + cy - text_h // 2,
+                rect.left + cx + w // 2, rect.top + cy + text_h // 2)
 
     def _get_test_ocr(self):
         """获取测试用的OCR引擎（不依赖监控启动）"""
@@ -1130,6 +1223,13 @@ class SMDConfigEditor(tk.Toplevel):
                 return False
             items = self._ocr_recognize_with_pos(ocr_engine, img)
             norm_text = self._normalize_match_text(text)
+            # 覆盖层：红色标目标
+            for ocr_t, cx, cy in items:
+                if norm_text in self._normalize_match_text(ocr_t):
+                    self._show_overlay(
+                        [(*self._text_rect(rect, cx, cy, ocr_t), '#FF0000', ocr_t)],
+                        window_rect=rect)
+                    break
             # 收集所有匹配项，优先选择长度最接近的（最精确匹配）
             candidates = []
             for ocr_text, cx, cy in items:
@@ -1166,9 +1266,9 @@ class SMDConfigEditor(tk.Toplevel):
             self._log(f"[测试]   OCR点击异常: {e}")
         return False
 
-    def _find_slider_thumb(self, img, value_pos, label_pos, win_w, win_h, current_value=None):
+    def _find_slider_thumb(self, img, value_pos, label_pos, win_w, win_h, current_value=None, offset_x=0, offset_y=0):
         """在截图上找圆形滑块位置（白色圆形，在数值右侧）
-        搜索范围：数值x坐标 + 字符长度*10/2 起，宽130像素，y±15像素
+        搜索范围：数值x坐标 + 字符长度*10/2 + offset_x 起，宽130像素，y±15+offset_y
         使用区域采样白色像素密度找滑块中心，避免和文字混淆
         返回 (x, y) 绝对窗口内坐标，或 None
         """
@@ -1181,10 +1281,10 @@ class SMDConfigEditor(tk.Toplevel):
 
         # 搜索范围：数值右侧
         char_len = len(current_value) if current_value else 3
-        search_left = int(value_pos[0] + char_len * 10 / 2)
+        search_left = int(value_pos[0] + char_len * 10 / 2 + offset_x)
         search_right = search_left + 130
-        search_top = max(0, value_pos[1] - 15)
-        search_bottom = min(win_h, value_pos[1] + 15)
+        search_top = max(0, value_pos[1] - 15 + offset_y)
+        search_bottom = min(win_h, value_pos[1] + 15 + offset_y)
 
         if search_left >= search_right or search_top >= search_bottom:
             return None
@@ -1294,6 +1394,8 @@ class SMDConfigEditor(tk.Toplevel):
         item_type = item.get('item_type', 'toggle')
         target_value = item.get('target_value', '')
         method = item.get('value_set_method', 'click')
+        offset_x = int(item.get('offset_x', 0) or 0)
+        offset_y = int(item.get('offset_y', 0) or 0)
 
         if not ocr_label:
             return
@@ -1323,10 +1425,23 @@ class SMDConfigEditor(tk.Toplevel):
                         norm_label = self._normalize_match_text(ocr_label)
                         # 找标题文字位置
                         title_pos = None
+                        title_text = ''
                         for ocr_text, cx, cy in items:
                             if norm_label in self._normalize_match_text(ocr_text):
                                 title_pos = (cx, cy)
+                                title_text = ocr_text
                                 break
+                        # 覆盖层：红色标签 + 绿色箭头范围
+                        regions = []
+                        if title_pos:
+                            regions.append((*self._text_rect(rect, title_pos[0], title_pos[1], title_text),
+                                            '#FF0000', title_text))
+                            arrow_x = max(0, title_pos[0] - len(ocr_label) / 2 * 15 - 50)
+                            arrow_y = title_pos[1] + 10
+                            regions.append((rect.left + arrow_x - 15, rect.top + arrow_y - 15,
+                                            rect.left + arrow_x + 15, rect.top + arrow_y + 15,
+                                            '#00FF00', '箭头'))
+                        self._show_overlay(regions, window_rect=rect)
                         if not title_pos:
                             self._log(f"[重启] 下拉框: 未找到标题 '{ocr_label}'")
                             return
@@ -1335,8 +1450,8 @@ class SMDConfigEditor(tk.Toplevel):
                         # 原力界面布局: [当前值文本 | ▼] ... 标题文字
                         char_count = len(ocr_label)
                         text_half_width = int(char_count / 2 * 15)
-                        arrow_x = max(0,title_pos[0] - text_half_width-50)
-                        arrow_y = title_pos[1] + 10
+                        arrow_x = max(0, title_pos[0] - text_half_width - 50 - offset_x)
+                        arrow_y = title_pos[1] + 10 + offset_y
                         abs_x = rect.left + arrow_x
                         abs_y = rect.top + arrow_y
                         self._log(f"[重启] 下拉框: 点击固定偏移箭头位置 ({arrow_x}, {arrow_y})")
@@ -1372,10 +1487,18 @@ class SMDConfigEditor(tk.Toplevel):
                         norm_label = self._normalize_match_text(ocr_label)
                         # 找到标签文字位置
                         label_pos = None
+                        label_text = ''
                         for ocr_text, cx, cy in items:
                             if norm_label in self._normalize_match_text(ocr_text):
                                 label_pos = (cx, cy)
+                                label_text = ocr_text
                                 break
+                        # 覆盖层：红色标签
+                        regions = []
+                        if label_pos:
+                            regions.append((*self._text_rect(rect, label_pos[0], label_pos[1], label_text),
+                                            '#FF0000', label_text))
+                        self._show_overlay(regions, window_rect=rect)
                         if label_pos:
                             # 开关控件在标签文字的左侧
                             # 根据标签文字长度和开关按钮大小动态计算扫描范围
@@ -1388,10 +1511,16 @@ class SMDConfigEditor(tk.Toplevel):
                             text_half_width = int(char_count / 2 * 15)
                             switch_width = 50
                             switch_height = 30
-                            scan_left = max(0, label_pos[0] - text_half_width - switch_width)
-                            scan_right = max(0, label_pos[0] - text_half_width - 10)
-                            scan_top = max(0, label_pos[1] - switch_height // 2)
-                            scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2)
+                            scan_left = max(0, label_pos[0] - text_half_width - switch_width - offset_x)
+                            scan_right = max(0, label_pos[0] - text_half_width - 10 - offset_x)
+                            scan_top = max(0, label_pos[1] - switch_height // 2 + offset_y)
+                            scan_bottom = min(img_cv.shape[0], label_pos[1] + switch_height // 2 + offset_y)
+                            # 覆盖层：绿色开关扫描范围
+                            self._show_overlay(
+                                [(rect.left + scan_left, rect.top + scan_top,
+                                  rect.left + scan_right, rect.top + scan_bottom,
+                                  '#00FF00', '开关范围')],
+                                window_rect=rect)
                             if scan_left < scan_right and scan_top < scan_bottom:
                                 scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
                                 # 找蓝色像素（B>80, B>G+20, B>R+20）
@@ -1441,10 +1570,18 @@ class SMDConfigEditor(tk.Toplevel):
                         norm_label = self._normalize_match_text(ocr_label)
                         # 找到标签文字位置
                         label_pos = None
+                        label_text = ''
                         for ocr_text, cx, cy in items:
                             if norm_label in self._normalize_match_text(ocr_text):
                                 label_pos = (cx, cy)
+                                label_text = ocr_text
                                 break
+                        # 覆盖层：红色标签
+                        regions = []
+                        if label_pos:
+                            regions.append((*self._text_rect(rect, label_pos[0], label_pos[1], label_text),
+                                            '#FF0000', label_text))
+                        self._show_overlay(regions, window_rect=rect)
                         if label_pos:
                             # 勾选框在标签文字的左侧
                             # 布局: [勾选框] [间距] [标签文字]
@@ -1453,10 +1590,16 @@ class SMDConfigEditor(tk.Toplevel):
                             text_half_width = int(char_count / 2 * 15)
                             box_width = 20
                             box_height = 20
-                            scan_left = max(0, label_pos[0] - text_half_width - box_width -20)
-                            scan_right = max(0, label_pos[0] - text_half_width - 5)
-                            scan_top = max(0, label_pos[1] - box_height // 2 + 10)
-                            scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2 + 10)
+                            scan_left = max(0, label_pos[0] - text_half_width - box_width - 20 - offset_x)
+                            scan_right = max(0, label_pos[0] - text_half_width - 5 - offset_x)
+                            scan_top = max(0, label_pos[1] - box_height // 2 + 10 + offset_y)
+                            scan_bottom = min(img_cv.shape[0], label_pos[1] + box_height // 2 + 10 + offset_y)
+                            # 覆盖层：绿色勾选框范围
+                            self._show_overlay(
+                                [(rect.left + scan_left, rect.top + scan_top,
+                                  rect.left + scan_right, rect.top + scan_bottom,
+                                  '#00FF00', '勾选范围')],
+                                window_rect=rect)
                             if scan_left < scan_right and scan_top < scan_bottom:
                                 scan_roi = img_cv[scan_top:scan_bottom, scan_left:scan_right]
                                 # 找白色/浅色像素（对勾颜色），对勾通常是白色或浅灰色
@@ -1514,10 +1657,18 @@ class SMDConfigEditor(tk.Toplevel):
                     if self._get_test_ocr():
                         items = self._ocr_recognize_with_pos(self._get_test_ocr(), img)
                         norm_label = self._normalize_match_text(ocr_label)
+                        anchor_text = ''
                         for ocr_text, cx, cy in items:
                             if norm_label in self._normalize_match_text(ocr_text):
                                 anchor_pos = (cx, cy)
+                                anchor_text = ocr_text
                                 break
+                        # 覆盖层：红色锚点
+                        if anchor_pos:
+                            self._show_overlay(
+                                [(*self._text_rect(rect, anchor_pos[0], anchor_pos[1], anchor_text),
+                                  '#FF0000', anchor_text)],
+                                window_rect=rect)
 
                     if not anchor_pos:
                         self._log(f"[重启] 特殊操作: 未找到锚点 '{ocr_label}'")
@@ -1554,6 +1705,16 @@ class SMDConfigEditor(tk.Toplevel):
 
                         if self._get_test_ocr():
                             list_items = self._ocr_recognize_with_pos(self._get_test_ocr(), list_img)
+                            # 覆盖层：红色标目标脚本
+                            t_norm = self._normalize_script_name(self._strip_bin(target_value))
+                            for lt, lcx, lcy in list_items:
+                                if t_norm in self._normalize_script_name(lt):
+                                    self._show_overlay(
+                                        [(abs_left + lcx - len(lt)*7, abs_top + lcy - 11,
+                                          abs_left + lcx + len(lt)*7, abs_top + lcy + 11,
+                                          '#FF0000', lt)],
+                                        window_rect=rect)
+                                    break
                             t_norm = self._normalize_script_name(self._strip_bin(target_value))
                             best_match = None
                             best_diff = 999
@@ -1619,10 +1780,18 @@ class SMDConfigEditor(tk.Toplevel):
                 if self._get_test_ocr():
                     items = self._ocr_recognize_with_pos(self._get_test_ocr(), img)
                     ctrl_pos = None
+                    ctrl_text = ''
                     for ocr_text, cx, cy in items:
                         if ocr_label in ocr_text:
                             ctrl_pos = (cx, cy)
+                            ctrl_text = ocr_text
                             break
+                    # 覆盖层：红色标签
+                    if ctrl_pos:
+                        self._show_overlay(
+                            [(*self._text_rect(rect, ctrl_pos[0], ctrl_pos[1], ctrl_text),
+                              '#FF0000', ctrl_text)],
+                            window_rect=rect)
 
                     if not ctrl_pos:
                         self._log(f"[重启] 未找到滑块 '{ocr_label}'")
@@ -1633,8 +1802,8 @@ class SMDConfigEditor(tk.Toplevel):
                     input_width = 100
                     # input_height = 20
 
-                    click_left = max(0, ctrl_pos[0] - text_half_width  - input_width)
-                    click_top = max(0, ctrl_pos[1]  )
+                    click_left = max(0, ctrl_pos[0] - text_half_width - input_width - offset_x)
+                    click_top = max(0, ctrl_pos[1] + offset_y)
                     abs_x = rect.left + click_left
                     abs_y = rect.top + click_top
 
@@ -1721,9 +1890,11 @@ class SMDConfigEditor(tk.Toplevel):
 
                     # 1. 找到标签位置
                     label_pos = None
+                    label_text = ''
                     for ocr_text, cx, cy in items:
                         if norm_label in self._normalize_match_text(ocr_text):
                             label_pos = (cx, cy)
+                            label_text = ocr_text
                             break
                     if not label_pos:
                         self._log(f"[重启] 圆形滑条: 未找到标签 '{ocr_label}'")
@@ -1732,15 +1903,40 @@ class SMDConfigEditor(tk.Toplevel):
                     # 2. 找同行的数值文字（包含数字，在标签右侧）
                     current_value = None
                     value_pos = None
+                    value_text = ''
                     for ocr_text, cx, cy in items:
-                        if abs(cy - label_pos[1]) < 10 and cx > label_pos[0] and cx - label_pos[0] < 100:
+                        if abs(cy - label_pos[1] - offset_y) < 10 and cx > label_pos[0] + offset_x and cx - label_pos[0] < 100 + offset_x:
                             if any(c.isdigit() or c == '.' for c in ocr_text):
                                 current_value = ocr_text
                                 value_pos = (cx, cy)
+                                value_text = ocr_text
                                 break
 
                     # 3. 找圆形滑块位置（同行、在数值右侧、通过区域采样白色像素检测）
-                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_w, win_h, current_value)
+                    thumb_pos = self._find_slider_thumb(img, value_pos, label_pos, win_w, win_h, current_value, offset_x, offset_y)
+
+                    # 覆盖层：红色标签 + 蓝色目标值范围 + 绿色当前值 + 蓝色滑块范围
+                    regions = []
+                    if label_pos:
+                        regions.append((*self._text_rect(rect, label_pos[0], label_pos[1], label_text),
+                                        '#FF0000', label_text))
+                    if value_pos:
+                        regions.append((*self._text_rect(rect, value_pos[0], value_pos[1], value_text),
+                                        '#00FF00', value_text))
+                        # 蓝色：数值搜索范围（标签右侧100px内同行）
+                        char_len = len(value_text) if value_text else 3
+                        srch_left = max(0, value_pos[0] - char_len * 5)
+                        srch_right = min(win_w, value_pos[0] + char_len * 5)
+                        regions.append((rect.left + srch_left, rect.top + value_pos[1] - 15,
+                                        rect.left + srch_right, rect.top + value_pos[1] + 15,
+                                        '#00BFFF', '数值范围'))
+                    if thumb_pos:
+                        # 蓝色：滑块搜索范围（数值右侧到窗口边缘）
+                        sl_left = max(0, (value_pos[0] if value_pos else label_pos[0]) + 80)
+                        regions.append((rect.left + sl_left, rect.top + label_pos[1] - 20,
+                                        rect.right - 10, rect.top + label_pos[1] + 20,
+                                        '#00BFFF', '滑块范围'))
+                    self._show_overlay(regions, window_rect=rect)
 
                     if thumb_pos and current_value and target_value:
                         try:
@@ -1798,7 +1994,7 @@ class SMDConfigEditor(tk.Toplevel):
         if self.game_monitor_ref:
             game_title = self.game_monitor_ref.config.window.get('title', '')
         if not game_title:
-            config_path = os.path.join(os.path.dirname(__file__), 'configs', 'default.json')
+            config_path = os.path.join(_BASE_DIR, 'configs', 'default.json')
             if os.path.isfile(config_path):
                 try:
                     with open(config_path, 'r', encoding='utf-8') as f:
@@ -1848,7 +2044,7 @@ class SMDConfigEditor(tk.Toplevel):
             game_title = self.game_monitor_ref.config.window.get('title', '')
         if not game_title:
             # 尝试从配置文件读取
-            config_path = os.path.join(os.path.dirname(__file__), 'configs', 'default.json')
+            config_path = os.path.join(_BASE_DIR, 'configs', 'default.json')
             if os.path.isfile(config_path):
                 try:
                     with open(config_path, 'r', encoding='utf-8') as f:
@@ -2142,7 +2338,7 @@ class SMDConfigEditor(tk.Toplevel):
 
     def _refresh_save_targets(self):
         """刷新保存目标下拉列表（隐藏默认 smd_settings.json）"""
-        smd_dir = os.path.join(os.path.dirname(__file__), 'smd_config')
+        smd_dir = os.path.join(_DATA_DIR, 'smd_config')
         files = []
         if os.path.isdir(smd_dir):
             try:
@@ -2168,7 +2364,8 @@ class SMDConfigEditor(tk.Toplevel):
             return
         if not target.endswith('.json'):
             target += '.json'
-        smd_dir = os.path.join(os.path.dirname(__file__), 'smd_config')
+        smd_dir = os.path.join(_DATA_DIR, 'smd_config')
+        os.makedirs(smd_dir, exist_ok=True)
         filepath = os.path.join(smd_dir, target)
         if self._save_to_file(filepath):
             messagebox.showinfo("保存成功", f"配置已保存到：\n{filepath}", parent=self)
@@ -2192,7 +2389,7 @@ class SMDConfigEditor(tk.Toplevel):
 # ==================== 脚本元数据编辑器 ====================
 
 # 脚本元数据保存目录
-SCRIPT_META_DIR = os.path.join(os.path.dirname(__file__), 'script_meta')
+SCRIPT_META_DIR = os.path.join(_DATA_DIR, 'script_meta')
 
 
 class ScriptMetaEditor(tk.Toplevel):
